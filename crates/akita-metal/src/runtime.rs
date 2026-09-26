@@ -113,11 +113,15 @@ const FP128_DIRECT_RELATION_SETUP_SOURCE_KERNEL_NAME: &str =
 const FP128_DIRECT_RELATION_SPARSE_SOURCE_KERNEL_NAME: &str =
     "akita_fp128_direct_relation_sparse_source";
 const KERNEL_SOURCE: &str = include_str!("kernels/onehot.metal");
+/// Largest D512 panel threadgroup; each GPU gets what its compiled pipeline
+/// allows (register pressure: 640 on M1 Max), rounded down to whole simdgroups.
 const FP128_D512_THREADS: usize = 1_024;
+const SIMD_WIDTH: usize = 32;
 const PACKED_ONEHOT_BUFFER_ALIGNMENT: usize = 16 * 1024;
 pub(crate) const FP128_D512_TASKS_PER_STREAM: usize = 32;
 pub(crate) const FP128_D512_POSITION_PARTIALS: usize = 16;
 pub(crate) const FP128_D128_RANK3_TASKS_PER_STREAM: usize = 64;
+const FP128_D128_RANK3_TASKS_PER_SIMDGROUP: usize = 2;
 pub(crate) const FP128_D128_RANK3_POSITION_PARTIAL_ALIGNMENT: usize = 16;
 const FP128_D128_RANK3_THREADGROUP_BYTES: usize = 5 * 1_024 * size_of::<u32>();
 const FP128_D128_RANK3_RING_D: u64 = 128;
@@ -1188,20 +1192,38 @@ impl MetalRuntime {
         }
     }
 
+    /// Threads per D512 panel threadgroup on this GPU (whole simdgroups, <= 1024).
+    pub(crate) fn d512_panel_threads(&self) -> usize {
+        let max = self.packed_fp128_d512_pipeline.max_total_threads_per_threadgroup() as usize;
+        max.min(FP128_D512_THREADS) / SIMD_WIDTH * SIMD_WIDTH
+    }
+
+    /// Tasks (one per simdgroup) a D512 panel threadgroup covers on this GPU.
+    pub(crate) fn d512_tasks_per_stream(&self) -> usize {
+        self.d512_panel_threads() / SIMD_WIDTH
+    }
+
     pub(crate) fn supports_packed_fp128_d512_panels(&self) -> bool {
-        self.packed_fp128_d512_pipeline
-            .max_total_threads_per_threadgroup()
-            >= FP128_D512_THREADS as u64
+        self.d512_panel_threads() >= 4 * SIMD_WIDTH
             && self
                 .packed_fp128_d512_pipeline
                 .static_threadgroup_memory_length()
                 == FP128_D512_THREADGROUP_BYTES as u64
     }
 
+    /// Threads per D128 rank-3 threadgroup on this GPU (whole simdgroups, <= 1024).
+    pub(crate) fn d128_rank3_threads(&self) -> usize {
+        let max = self.packed_fp128_d128_rank3_pipeline.max_total_threads_per_threadgroup() as usize;
+        max.min(FP128_D512_THREADS) / SIMD_WIDTH * SIMD_WIDTH
+    }
+
+    /// Tasks a D128 rank-3 threadgroup covers (two per simdgroup).
+    pub(crate) fn d128_rank3_tasks_per_stream(&self) -> usize {
+        self.d128_rank3_threads() / SIMD_WIDTH * FP128_D128_RANK3_TASKS_PER_SIMDGROUP
+    }
+
     pub(crate) fn supports_packed_fp128_d128_rank3(&self) -> bool {
-        self.packed_fp128_d128_rank3_pipeline
-            .max_total_threads_per_threadgroup()
-            >= FP128_D512_THREADS as u64
+        self.d128_rank3_threads() >= 4 * SIMD_WIDTH
             && self
                 .packed_fp128_d128_rank3_pipeline
                 .static_threadgroup_memory_length()

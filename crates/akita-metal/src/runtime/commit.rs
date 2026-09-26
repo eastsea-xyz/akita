@@ -173,9 +173,10 @@ impl MetalRuntime {
                 ));
             }
             params.columns_per_threadgroup = 1;
+            let tasks_per_stream = self.d512_tasks_per_stream();
             let base_streams = params
                 .num_blocks
-                .div_ceil(FP128_D512_TASKS_PER_STREAM as u64);
+                .div_ceil(tasks_per_stream as u64);
             let matrix_block_streams = base_streams
                 .checked_mul(FP128_D512_COEFFICIENT_BANDS as u64)
                 .ok_or(MetalCommitError::ShapeOverflow("coefficient-band streams"))?;
@@ -222,11 +223,11 @@ impl MetalRuntime {
             let mut input_zero_copy = true;
             for first_stream in (0..base_streams).step_by(streams_per_command) {
                 let stream_count = (base_streams - first_stream).min(streams_per_command as u64);
-                let task_offset = first_stream * FP128_D512_TASKS_PER_STREAM as u64;
+                let task_offset = first_stream * tasks_per_stream as u64;
                 let mut dispatch_params = params;
                 dispatch_params.task_offset = task_offset;
                 dispatch_params.dispatch_tasks = (stream_count
-                    * FP128_D512_TASKS_PER_STREAM as u64)
+                    * tasks_per_stream as u64)
                     .min(params.num_blocks - task_offset);
                 let final_task = task_offset + dispatch_params.dispatch_tasks - 1;
                 let first_block = task_offset / params.num_columns;
@@ -268,7 +269,7 @@ impl MetalRuntime {
                 encoder.set_buffer(4, Some(&active_zero_rows), 0);
                 encoder.dispatch_thread_groups(
                     MTLSize::new(command_threadgroups, 1, 1),
-                    MTLSize::new(FP128_D512_THREADS as u64, 1, 1),
+                    MTLSize::new(self.d512_panel_threads() as u64, 1, 1),
                 );
                 encoder.end_encoding();
                 command.commit();
@@ -336,7 +337,7 @@ impl MetalRuntime {
                 reduction_gpu,
                 command_buffers: commands.len() + 1,
                 kernel: MetalOneHotKernel::PackedFp128D512Panels,
-                blocks_per_threadgroup: FP128_D512_TASKS_PER_STREAM,
+                blocks_per_threadgroup: tasks_per_stream,
                 columns_per_threadgroup: 1,
                 matrix_block_streams: matrix_block_streams as usize,
                 scratch_bytes,
@@ -431,7 +432,7 @@ impl MetalRuntime {
                 ));
             }
             params.columns_per_threadgroup = 1;
-            let tasks_per_stream = FP128_D128_RANK3_TASKS_PER_STREAM as u64;
+            let tasks_per_stream = self.d128_rank3_tasks_per_stream() as u64;
             let base_streams = params.num_blocks.div_ceil(tasks_per_stream);
             let groups_per_stream = params
                 .n_a
@@ -513,6 +514,7 @@ impl MetalRuntime {
                 let encoder = command.new_compute_command_encoder();
                 encoder.set_label("Akita packed fp128 D128 rank-3 element tiles");
                 encoder.set_compute_pipeline_state(&self.packed_fp128_d128_rank3_pipeline);
+                let rank3_threads = self.d128_rank3_threads() as u64;
                 encoder.set_buffer(0, Some(matrix), 0);
                 encoder.set_buffer(1, Some(&lane_buffer.buffer), 0);
                 encoder.set_buffer(2, Some(&partials), 0);
@@ -520,7 +522,7 @@ impl MetalRuntime {
                 encoder.set_buffer(4, Some(&active_zero_rows), 0);
                 encoder.dispatch_thread_groups(
                     MTLSize::new(command_threadgroups, 1, 1),
-                    MTLSize::new(FP128_D512_THREADS as u64, 1, 1),
+                    MTLSize::new(rank3_threads, 1, 1),
                 );
                 encoder.end_encoding();
                 command.commit();
@@ -588,7 +590,7 @@ impl MetalRuntime {
                 reduction_gpu,
                 command_buffers: commands.len() + 1,
                 kernel: MetalOneHotKernel::PackedFp128D128Rank3,
-                blocks_per_threadgroup: FP128_D128_RANK3_TASKS_PER_STREAM,
+                blocks_per_threadgroup: tasks_per_stream as usize,
                 columns_per_threadgroup: 1,
                 matrix_block_streams: threadgroups as usize,
                 scratch_bytes,

@@ -4414,12 +4414,15 @@ kernel void akita_packed_onehot_commit_fp128_d512_panels(
     constant PackedOneHotCommitParams &params [[buffer(3)]],
     device const ulong *active_zero_rows [[buffer(4)]],
     uint thread_index [[thread_index_in_threadgroup]],
+    uint3 threadgroup_size [[threads_per_threadgroup]],
     uint3 threadgroup_index [[threadgroup_position_in_grid]])
 {
     threadgroup uint shared_matrix[PACKED_FP128_D512_PANEL_TILE_ELEMENTS * 4];
 
-    constexpr uint tasks_per_stream = 32u;
-    constexpr uint threads_per_threadgroup = 1024u;
+    // One simdgroup per task; the host sizes threadgroups to what this GPU's
+    // compiled pipeline allows (a multiple of 32, at most 1024).
+    uint threads_per_threadgroup = threadgroup_size.x;
+    uint tasks_per_stream = threads_per_threadgroup >> 5u;
     constexpr uint positions_per_tile = 4u;
     uint live_columns = (uint)params.num_columns;
     uint onehot_k = (uint)params.onehot_k;
@@ -4879,12 +4882,15 @@ kernel void akita_packed_onehot_commit_fp128_d128_rank3(
     constant PackedOneHotCommitParams &params [[buffer(3)]],
     device const ulong *active_zero_rows [[buffer(4)]],
     uint thread_index [[thread_index_in_threadgroup]],
+    uint3 threadgroup_size [[threads_per_threadgroup]],
     uint3 threadgroup_index [[threadgroup_position_in_grid]])
 {
     threadgroup uint shared_matrix[PACKED_FP128_D128_RANK3_TILE_ELEMENTS * 5];
 
-    constexpr uint tasks_per_stream = PACKED_FP128_D128_RANK3_TASKS_PER_STREAM;
-    constexpr uint threads_per_threadgroup = 1024u;
+    // Sized per GPU by the host (whole simdgroups, at most 1024 threads).
+    uint threads_per_threadgroup = threadgroup_size.x;
+    uint tasks_per_stream =
+        (threads_per_threadgroup >> 5u) * PACKED_FP128_D128_RANK3_TASKS_PER_SIMDGROUP;
     uint num_tasks = (uint)params.dispatch_tasks;
     uint streams = (num_tasks + tasks_per_stream - 1u) / tasks_per_stream;
     uint simd_lane = thread_index & 31u;

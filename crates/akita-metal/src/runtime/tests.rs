@@ -478,3 +478,16 @@ fn reduced_linear_sources_match_cpu_recurrence() {
     assert_eq!(actual[..D], expected_setup);
     assert_eq!(actual[D..], expected_sparse);
 }
+
+#[test]
+fn probe_d512_pipeline_limits() {
+    let runtime = MetalRuntime::new().unwrap();
+    eprintln!(
+        "d512 panels: max threads {} static tg bytes {} (needs {} / {}); d128 rank3 max threads {}",
+        runtime.packed_fp128_d512_pipeline.max_total_threads_per_threadgroup(),
+        runtime.packed_fp128_d512_pipeline.static_threadgroup_memory_length(),
+        super::FP128_D512_THREADS,
+        super::FP128_D512_THREADGROUP_BYTES,
+        runtime.packed_fp128_d128_rank3_pipeline.max_total_threads_per_threadgroup(),
+    );
+}
