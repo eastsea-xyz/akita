@@ -5,6 +5,12 @@
 //! registries. Backend NTT caches are never persisted.
 
 mod recursive_prefixes;
+mod verifier;
+
+pub use verifier::{
+    derive_setup_prefix_verifier_slots, new_verifier_setup, required_setup_prefix_slot_ids,
+    verifier_matrix_capacity,
+};
 
 #[cfg(feature = "disk-persistence")]
 use akita_config::ValidatedScheduleCatalog;
@@ -618,6 +624,54 @@ mod tests {
             verifier_setup.expanded.shared_matrix().num_field_elements(),
             capacity.num_field_elements
         );
+    }
+
+    #[test]
+    fn verifier_only_setup_equals_the_narrowed_prover_derived_setup() {
+        for (max_num_vars, batch) in [(14, 1), (14, 3), (16, 2)] {
+            let catalog = schedules();
+            let prover_setup =
+                new_prover_setup::<TestF, Cfg>(&catalog, max_num_vars, batch).unwrap();
+            let requirements =
+                SetupRequirements::from_catalog::<Cfg>(&catalog, max_num_vars, batch).unwrap();
+            let capacity = verifier_matrix_capacity(&requirements);
+            assert!(
+                capacity.num_field_elements
+                    <= prover_setup.expanded.shared_matrix().num_field_elements()
+            );
+            let from_prover = prover_setup.to_verifier_setup(capacity).unwrap();
+
+            let seed = prover_setup.expanded.descriptor().setup_seed.clone();
+            let derived = new_verifier_setup::<TestF, Cfg>(
+                &catalog,
+                max_num_vars,
+                batch,
+                &akita_types::SetupPrefixVerifierRegistry::new(seed.clone()),
+            )
+            .unwrap();
+            assert_eq!(derived, from_prover, "nv={max_num_vars} batch={batch}");
+            assert_eq!(
+                derived.expanded.descriptor(),
+                from_prover.expanded.descriptor()
+            );
+
+            let mut known = akita_types::SetupPrefixVerifierRegistry::new(seed);
+            known
+                .replace_from_prover_registry(&prover_setup.prefix_slots)
+                .unwrap();
+            let supplied =
+                new_verifier_setup::<TestF, Cfg>(&catalog, max_num_vars, batch, &known).unwrap();
+            assert_eq!(supplied, from_prover, "nv={max_num_vars} batch={batch}");
+        }
+    }
+
+    #[test]
+    fn verifier_only_setup_rejects_prefix_slots_of_another_stream() {
+        let other = akita_types::SetupPrefixVerifierRegistry::<TestF>::new(
+            akita_types::AkitaSetupSeed::shake256_paged_v1([7u8; 32]),
+        );
+        let err = new_verifier_setup::<TestF, Cfg>(&schedules(), 14, 1, &other).unwrap_err();
+        assert!(err.to_string().contains("different public matrix"));
     }
 
     #[test]

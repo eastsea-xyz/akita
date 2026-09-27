@@ -83,6 +83,36 @@ where
         )
     }
 
+    /// Derive a verifier setup without building the prover setup.
+    ///
+    /// Materializes only the public-matrix prefix verification reads for this
+    /// catalog and capacity. Setup-prefix commitments come from
+    /// `known_prefix_slots` when present there and are derived otherwise (see
+    /// [`akita_setup::new_verifier_setup`]). The result equals
+    /// [`Self::setup_verifier`] of [`Self::setup_prover`] narrowed to
+    /// [`akita_setup::verifier_matrix_capacity`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the requested capacity or catalog is invalid, or a
+    /// missing setup-prefix commitment cannot be derived.
+    pub fn setup_verifier_only(
+        &self,
+        max_num_vars: usize,
+        max_num_batched_polys: usize,
+        known_prefix_slots: &akita_types::SetupPrefixVerifierRegistry<Cfg::Field>,
+    ) -> Result<AkitaVerifierSetup<Cfg::Field>, AkitaError>
+    where
+        Cfg::Field: AkitaDeserialize<Context = ()>,
+    {
+        akita_setup::new_verifier_setup::<Cfg::Field, Cfg>(
+            &self.schedules,
+            max_num_vars,
+            max_num_batched_polys,
+            known_prefix_slots,
+        )
+    }
+
     /// Derive a verifier setup that preserves the prover's full matrix prefix.
     ///
     /// # Errors

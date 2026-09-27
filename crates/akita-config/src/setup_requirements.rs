@@ -3,7 +3,8 @@
 use crate::CommitmentConfig;
 use akita_error::AkitaError;
 use akita_types::{
-    setup_matrix_capacity_for_schedule, AkitaScheduleLookupKey, FoldSchedule, SetupMatrixCapacity,
+    setup_matrix_capacity_for_schedule, verifier_setup_matrix_capacity_for_schedule,
+    AkitaScheduleLookupKey, FoldSchedule, SetupMatrixCapacity,
 };
 
 /// Running maximum over every setup matrix a sizing request can reach.
@@ -49,6 +50,12 @@ pub struct SetupRequirements {
     pub matrix_capacity: SetupMatrixCapacity,
     /// Canonical ordered set of prefix commitments for eligible schedule rows.
     pub prefix_slot_ids: Vec<akita_types::SetupPrefixSlotId>,
+    /// Public-matrix prefix a verifier needs for every eligible schedule row:
+    /// the maximum of [`verifier_setup_matrix_capacity_for_schedule`] over
+    /// those rows. Verification rejects (never reads past) a schedule that
+    /// needs more, so a verifier setup of this size accepts exactly what the
+    /// full prover matrix accepts.
+    pub verifier_matrix_capacity: SetupMatrixCapacity,
 }
 
 impl SetupRequirements {
@@ -65,6 +72,7 @@ impl SetupRequirements {
 
         let mut scan = SetupCapacityScan::new();
         let mut prefix_slot_ids = std::collections::BTreeSet::new();
+        let mut verifier_matrix_capacity = SetupMatrixCapacity::minimum();
         for row in catalog.rows() {
             for profile in &row.profiles().precommitteds {
                 if profile.group.num_vars() <= max_num_vars
@@ -84,11 +92,20 @@ impl SetupRequirements {
             };
             if key.fits_setup_capacity(max_num_vars, max_num_batched_polys)? {
                 scan.observe_schedule(row.schedule())?;
+                let opening_layout = key.opening_layout()?;
+                verifier_matrix_capacity.num_field_elements =
+                    verifier_matrix_capacity.num_field_elements.max(
+                        verifier_setup_matrix_capacity_for_schedule(
+                            row.schedule(),
+                            &opening_layout,
+                        )?
+                        .num_field_elements,
+                    );
                 if Cfg::recursive_setup_planning() {
                     prefix_slot_ids.extend(
                         crate::setup_prefix_slots::extract_setup_prefix_slot_ids_from_schedule(
                             row.schedule(),
-                            &key.opening_layout()?,
+                            &opening_layout,
                         )?,
                     );
                 }
@@ -97,6 +114,7 @@ impl SetupRequirements {
         Ok(Self {
             matrix_capacity: scan.finish(max_num_vars)?,
             prefix_slot_ids: prefix_slot_ids.into_iter().collect(),
+            verifier_matrix_capacity,
         })
     }
 }

@@ -577,6 +577,43 @@ impl<F: Field + Valid> Valid for SetupPrefixVerifierSlot<F> {
     }
 }
 
+impl<F: Field> SetupPrefixVerifierSlot<F> {
+    /// This slot with its commitment rows tagged by the ring dimension the
+    /// prover commits them at: the terminal map of the slot's compression
+    /// plan.
+    ///
+    /// Serialization stores rows in compact form (`ring_dim = 0`), and the
+    /// verifier reads only their coefficients, so this changes no protocol
+    /// value. It makes a deserialized slot equal, field for field, to the one
+    /// setup construction produces.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the slot's compression plan is malformed or a row
+    /// is not a whole number of ring elements at that dimension.
+    pub fn with_committed_ring_dimension(self) -> Result<Self, AkitaError> {
+        let plan = setup_prefix_compression_plan(&self.id.commitment_profile)
+            .map_err(|error| AkitaError::InvalidSetup(error.to_string()))?;
+        let ring_dim = plan
+            .maps()
+            .last()
+            .ok_or_else(|| {
+                AkitaError::InvalidSetup("setup prefix compression plan has no maps".to_string())
+            })?
+            .ring_dimension();
+        let rows = self
+            .commitment
+            .rows
+            .into_iter()
+            .map(|row| RingVec::from_coeffs_with_ring_dim(row.coeffs().to_vec(), ring_dim))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            id: self.id,
+            commitment: SetupPrefixPublicCommitment { rows },
+        })
+    }
+}
+
 impl<F: Field + AkitaSerialize> AkitaSerialize for SetupPrefixVerifierSlot<F> {
     fn serialize_with_mode<W: Write>(
         &self,

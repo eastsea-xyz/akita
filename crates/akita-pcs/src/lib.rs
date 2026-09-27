@@ -75,3 +75,11 @@ pub use jolt_field::{
     PRIME_OFFSET_MAX, PRIME_OFFSET_SPECS,
 };
 pub use scheme::AkitaCommitmentScheme;
+
+/// Verifier-only setup derivation (see [`AkitaCommitmentScheme::setup_verifier_only`]).
+pub mod verifier_setup {
+    pub use akita_setup::{
+        derive_setup_prefix_verifier_slots, new_verifier_setup, required_setup_prefix_slot_ids,
+        verifier_matrix_capacity,
+    };
+}
