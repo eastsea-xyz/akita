@@ -273,6 +273,7 @@ impl MetalRuntime {
                 );
                 encoder.end_encoding();
                 command.commit();
+                crate::profiling::record_submission(command);
                 commands.push(command);
                 lane_buffers.push(lane_buffer);
             }
@@ -299,6 +300,7 @@ impl MetalRuntime {
             );
             reduction.end_encoding();
             reduction_command.commit();
+            crate::profiling::record_submission(reduction_command);
             reduction_command.wait_until_completed();
             let command_wall = command_start.elapsed();
             for command in &commands {
@@ -526,6 +528,7 @@ impl MetalRuntime {
                 );
                 encoder.end_encoding();
                 command.commit();
+                crate::profiling::record_submission(command);
                 commands.push(command);
                 lane_buffers.push(lane_buffer);
             }
@@ -552,6 +555,7 @@ impl MetalRuntime {
             );
             reduction.end_encoding();
             reduction_command.commit();
+            crate::profiling::record_submission(reduction_command);
             reduction_command.wait_until_completed();
             let command_wall = command_start.elapsed();
             for command in &commands {

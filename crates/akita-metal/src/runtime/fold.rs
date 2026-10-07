@@ -191,6 +191,7 @@ impl MetalRuntime {
                 );
                 encoder.end_encoding();
                 command.commit();
+                crate::profiling::record_submission(command);
                 commands.push((command, position_start, position_end));
             }
 
@@ -583,6 +584,7 @@ impl MetalRuntime {
                 );
                 encoder.end_encoding();
                 command.commit();
+                crate::profiling::record_submission(command);
                 commands.push((command, position_start, position_end));
             }
 

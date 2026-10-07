@@ -1,6 +1,7 @@
 //! Optional Apple Metal backend for Akita prover compute operations.
 
 mod error;
+pub mod profiling;
 
 pub use error::MetalCommitError;
 

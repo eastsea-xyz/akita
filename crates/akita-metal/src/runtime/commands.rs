@@ -363,6 +363,7 @@ pub(super) fn complete_command(
 ) -> Result<(Duration, Option<Duration>), MetalCommitError> {
     let start = Instant::now();
     command.commit();
+    crate::profiling::record_submission(command);
     command.wait_until_completed();
     let wall = start.elapsed();
     validate_completed_command(command)?;
@@ -399,7 +400,7 @@ pub(super) fn command_buffer_timestamp(
     unsafe { command.send_message::<(), f64>(Sel::register(name), ()) }.ok()
 }
 
-pub(super) fn completed_command_gpu_time(command: &CommandBufferRef) -> Option<Duration> {
+pub(crate) fn completed_command_gpu_time(command: &CommandBufferRef) -> Option<Duration> {
     let start = command_buffer_timestamp(command, "GPUStartTime")?;
     let end = command_buffer_timestamp(command, "GPUEndTime")?;
     if !start.is_finite() || !end.is_finite() || start <= 0.0 || end < start {

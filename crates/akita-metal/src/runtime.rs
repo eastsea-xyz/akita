@@ -21,7 +21,7 @@ use crate::MetalCommitError;
 
 mod buffers;
 mod coefficient_packing;
-mod commands;
+pub(crate) mod commands;
 mod commit;
 mod direct_range;
 mod fold;
