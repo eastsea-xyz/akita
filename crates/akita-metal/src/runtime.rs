@@ -25,6 +25,8 @@ pub(crate) mod commands;
 mod commit;
 mod direct_range;
 mod fold;
+#[path = "packed_onehot/k16.rs"]
+mod k16;
 mod relation_prefix;
 mod relation_resident;
 mod relation_rounds;
