@@ -1196,7 +1196,9 @@ impl MetalRuntime {
 
     /// Threads per D512 panel threadgroup on this GPU (whole simdgroups, <= 1024).
     pub(crate) fn d512_panel_threads(&self) -> usize {
-        let max = self.packed_fp128_d512_pipeline.max_total_threads_per_threadgroup() as usize;
+        let max = self
+            .packed_fp128_d512_pipeline
+            .max_total_threads_per_threadgroup() as usize;
         max.min(FP128_D512_THREADS) / SIMD_WIDTH * SIMD_WIDTH
     }
 
@@ -1215,7 +1217,9 @@ impl MetalRuntime {
 
     /// Threads per D128 rank-3 threadgroup on this GPU (whole simdgroups, <= 1024).
     pub(crate) fn d128_rank3_threads(&self) -> usize {
-        let max = self.packed_fp128_d128_rank3_pipeline.max_total_threads_per_threadgroup() as usize;
+        let max = self
+            .packed_fp128_d128_rank3_pipeline
+            .max_total_threads_per_threadgroup() as usize;
         max.min(FP128_D512_THREADS) / SIMD_WIDTH * SIMD_WIDTH
     }
 

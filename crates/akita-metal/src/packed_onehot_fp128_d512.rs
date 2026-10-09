@@ -265,9 +265,9 @@ mod tests {
         rows: usize,
         capacity: usize,
         zero_suffix_start: Option<usize>,
+        positions_per_block: usize,
     ) {
         const LIVE_COLUMNS: usize = 5;
-        const POSITIONS_PER_BLOCK: usize = 64;
         const ZERO_COLUMN_MASK: u64 = 0b0_1010;
 
         let lanes = (0..rows * LIVE_COLUMNS)
@@ -306,7 +306,7 @@ mod tests {
         let generic = OneHotPoly::<F, u8>::new(onehot_k, indices).unwrap();
         let plan = CommitInnerPlan {
             n_a: 1,
-            num_positions_per_block: POSITIONS_PER_BLOCK,
+            num_positions_per_block: positions_per_block,
             num_digits_inner: 1,
             log_basis_inner: 3,
         };
@@ -315,7 +315,7 @@ mod tests {
             num_vars,
             1,
             SetupMatrixCapacity {
-                num_field_elements: POSITIONS_PER_BLOCK * RING_D,
+                num_field_elements: positions_per_block * RING_D,
             },
         )
         .unwrap();
@@ -369,16 +369,43 @@ mod tests {
 
     #[test]
     fn parity_d512_k256_panels() {
-        assert_panel_parity(256, 4096, 32, None);
+        assert_panel_parity(256, 4096, 32, None, 64);
     }
 
     #[test]
     fn parity_d512_k256_panels_skip_zero_suffix() {
-        assert_panel_parity(256, 4096, 32, Some(2048));
+        assert_panel_parity(256, 4096, 32, Some(2048), 64);
     }
 
     #[test]
     fn parity_d512_k16_panels() {
-        assert_panel_parity(16, 2048, 64, None);
+        assert_panel_parity(16, 2048, 64, None, 64);
+    }
+    #[test]
+    fn k16_full2_panel_geometry_is_supported() {
+        let lanes = vec![1u8; 1 << 22];
+        let source = PackedOneHotCommitView::new(16, 64, 1, &lanes).unwrap();
+        let plan = CommitInnerPlan {
+            n_a: 1,
+            num_positions_per_block: 8192,
+            num_digits_inner: 1,
+            log_basis_inner: 3,
+        };
+        let shape = validate_shape::<512>(source, plan).unwrap();
+        assert_eq!(shape.blocks_per_column, 16);
+        assert_eq!(shape.positions_per_partial, 512);
+        assert_eq!(shape.active_a_cols, 8192);
+        assert_eq!(shape.output_coefficients, 64 * 16 * 512);
+    }
+
+    #[test]
+    fn parity_d512_k16_native_full2_positions_multiple_blocks() {
+        assert_panel_parity(16, 1 << 19, 64, None, 8192);
+    }
+
+    #[test]
+    #[ignore = "full T=2^22 CPU-Metal parity; run explicitly under the proof memory guard"]
+    fn parity_d512_k16_native_full2_exact_geometry() {
+        assert_panel_parity(16, 1 << 22, 64, None, 8192);
     }
 }
