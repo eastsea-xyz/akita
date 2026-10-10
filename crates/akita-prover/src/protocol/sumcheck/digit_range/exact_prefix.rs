@@ -42,6 +42,10 @@ impl<T: Copy> ExactPrefixTable<T> {
         self.explicit.len()
     }
 
+    pub(in crate::protocol::sumcheck) fn explicit_values(&self) -> &[T] {
+        &self.explicit
+    }
+
     pub(in crate::protocol::sumcheck) fn default_value(&self) -> T {
         self.default
     }

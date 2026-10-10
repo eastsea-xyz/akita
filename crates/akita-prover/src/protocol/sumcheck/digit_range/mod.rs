@@ -22,8 +22,13 @@ pub(crate) mod direct_range_leaf;
 pub(in crate::protocol::sumcheck) mod exact_prefix;
 mod range_class_tables;
 mod round_accumulation;
+mod rounds;
 
 pub use direct_range_leaf::LowBasisRangeCheckProver;
+pub use rounds::{
+    ClassIndexedDigitTreeFactory, ClassIndexedDigitTreeInput, ClassIndexedDigitTreeRound,
+    ClassIndexedDigitTreeSession,
+};
 
 use crate::backend::packed_digits::PackedSignedDigits;
 use crate::compute::{ComputeBackendSetup, CpuBackend, OpeningCluster, OperationCtx};
@@ -38,9 +43,11 @@ use akita_types::{
 };
 use class_indexed_product::ClassIndexedProductSubcheckProver;
 use class_indexed_range_leaf::ClassIndexedRangeLeafProver;
+use class_indexed_state::ClassIndexedDigitTreeProver;
 use compact_digit_source::CompactDigitSource;
 use jolt_field::{CanonicalEncoding, ExtField, Field, Ring};
 use jolt_field::{Fold, Unreduced};
+use std::sync::Arc;
 
 type DigitRangeProveOutput<E> = (AkitaStage1Proof<E>, Vec<E>);
 
@@ -138,6 +145,17 @@ where
     F: Field + CanonicalEncoding + akita_serialization::AkitaSerialize,
     E: ExtField<F> + Ring + Fold + Unreduced + AkitaSerialize,
 {
+    /// Admit an optional resident tree tail before any tree transcript mutation.
+    /// CPU backends keep the existing class-indexed arithmetic unchanged.
+    fn class_indexed_digit_tree_factory(
+        &self,
+        _prepared: &Self::PreparedSetup,
+        _domain_len: usize,
+        _basis: usize,
+    ) -> Result<Option<Arc<dyn ClassIndexedDigitTreeFactory<E>>>, AkitaError> {
+        Ok(None)
+    }
+
     fn prove_direct_digit_range<T>(
         &self,
         prepared: &Self::PreparedSetup,
@@ -239,13 +257,14 @@ fn prove_class_indexed_product_subcheck<F, E, T, const LANES: usize>(
     transcript: &mut T,
     level: u32,
     stage_index: u32,
+    factory: Option<Arc<dyn ClassIndexedDigitTreeFactory<E>>>,
 ) -> Result<(AkitaStage1StageProof<E>, Vec<E>), AkitaError>
 where
     F: Field + CanonicalEncoding + akita_serialization::AkitaSerialize,
     E: ExtField<F> + Ring + Fold + Unreduced + AkitaSerialize,
     T: akita_types::ProverTranscriptGrinding<F>,
 {
-    let mut stage = ClassIndexedProductSubcheckProver::<E, LANES>::new(
+    let stage = ClassIndexedProductSubcheckProver::<E, LANES>::new(
         input.source,
         input.plan,
         input.leaf_polynomials,
@@ -254,6 +273,7 @@ where
         input.equality_point,
         input.input_claim,
     )?;
+    let mut stage = ClassIndexedDigitTreeProver::new(stage, factory);
     let mut round = 0u32;
     let (sumcheck_proof, next_equality_point, _final_claim) =
         stage.prove::<F, T, _>(transcript, |transcript| {
@@ -272,7 +292,7 @@ where
     Ok((
         AkitaStage1StageProof {
             sumcheck_proof,
-            child_claims: stage.final_child_claims(),
+            child_claims: stage.final_values()?,
         },
         next_equality_point,
     ))
@@ -294,6 +314,7 @@ fn prove_product_prefix<F, E, T>(
     equality_point: Vec<E>,
     transcript: &mut T,
     level: u32,
+    factory: Option<Arc<dyn ClassIndexedDigitTreeFactory<E>>>,
 ) -> Result<ProductPrefix<E>, AkitaError>
 where
     F: Field + CanonicalEncoding + akita_serialization::AkitaSerialize,
@@ -336,18 +357,21 @@ where
                 transcript,
                 level,
                 stage,
+                factory.clone(),
             )?,
             4 => prove_class_indexed_product_subcheck::<F, E, T, 4>(
                 product_input,
                 transcript,
                 level,
                 stage,
+                factory.clone(),
             )?,
             8 => prove_class_indexed_product_subcheck::<F, E, T, 8>(
                 product_input,
                 transcript,
                 level,
                 stage,
+                factory.clone(),
             )?,
             _ => return Err(AkitaError::InvalidProof),
         };
@@ -517,7 +541,16 @@ impl<E: Field + Ring + Unreduced + Fold + AkitaSerialize> DigitRangeProver<E> {
                 level,
             );
         }
-        self.prove::<F, T>(transcript, physical_plan, level)
+        let factory = if physical_plan.is_none() {
+            backend.backend().class_indexed_digit_tree_factory(
+                backend.prepared(),
+                self.digit_source.domain_len(),
+                self.plan.basis(),
+            )?
+        } else {
+            None
+        };
+        self.prove_tree::<F, T>(transcript, physical_plan, level, factory)
     }
 
     /// Produce the full stage-1 tree proof and return the final `stage1_point`.
@@ -533,6 +566,21 @@ impl<E: Field + Ring + Unreduced + Fold + AkitaSerialize> DigitRangeProver<E> {
         transcript: &mut T,
         physical_plan: Option<&PhysicalResponsePlan>,
         level: u32,
+    ) -> Result<DigitRangeProveOutput<E>, AkitaError>
+    where
+        F: Field + CanonicalEncoding + akita_serialization::AkitaSerialize,
+        E: ExtField<F>,
+        T: akita_types::ProverTranscriptGrinding<F>,
+    {
+        self.prove_tree::<F, T>(transcript, physical_plan, level, None)
+    }
+
+    fn prove_tree<F, T>(
+        self,
+        transcript: &mut T,
+        physical_plan: Option<&PhysicalResponsePlan>,
+        level: u32,
+        factory: Option<Arc<dyn ClassIndexedDigitTreeFactory<E>>>,
     ) -> Result<DigitRangeProveOutput<E>, AkitaError>
     where
         F: Field + CanonicalEncoding + akita_serialization::AkitaSerialize,
@@ -603,8 +651,14 @@ impl<E: Field + Ring + Unreduced + Fold + AkitaSerialize> DigitRangeProver<E> {
             digit_source.prepare_class_indexed_leaf();
         }
 
-        let prefix =
-            prove_product_prefix::<F, E, T>(digit_source, plan, equality_point, transcript, level)?;
+        let prefix = prove_product_prefix::<F, E, T>(
+            digit_source,
+            plan,
+            equality_point,
+            transcript,
+            level,
+            factory.clone(),
+        )?;
         let batched_leaf_coeffs = prefix
             .plan
             .batch_leaf_polynomials(&prefix.weights, &prefix.leaf_coeffs)?;
@@ -634,12 +688,13 @@ impl<E: Field + Ring + Unreduced + Fold + AkitaSerialize> DigitRangeProver<E> {
             ));
         }
         let _leaf_span = tracing::info_span!("digit_range_polynomial_leaf").entered();
-        let mut leaf_stage = ClassIndexedRangeLeafProver::new(
+        let leaf_stage = ClassIndexedRangeLeafProver::new(
             prefix.digit_source,
             &prefix.equality_point,
             prefix.claim,
             batched_leaf_coeffs,
         )?;
+        let mut leaf_stage = ClassIndexedDigitTreeProver::new(leaf_stage, factory);
         let stage = u32::try_from(prefix.stage_proofs.len())
             .map_err(|_| AkitaError::InvalidSetup("Stage 1 index exceeds u32".into()))?;
         let mut round = 0u32;
@@ -663,7 +718,8 @@ impl<E: Field + Ring + Unreduced + Fold + AkitaSerialize> DigitRangeProver<E> {
             child_claims: Vec::new(),
         });
 
-        let range_image_eval = leaf_stage.final_range_image_eval();
+        let final_values = leaf_stage.final_values()?;
+        let range_image_eval = *final_values.first().ok_or(AkitaError::InvalidProof)?;
         let proof = AkitaStage1Proof {
             stages: stage_proofs,
             range_image_evaluation: range_image_eval,

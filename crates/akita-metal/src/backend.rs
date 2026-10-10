@@ -570,6 +570,20 @@ impl MetalBackend {
 }
 
 impl DirectDigitRangeProofBackend<F, F> for MetalBackend {
+    fn class_indexed_digit_tree_factory(
+        &self,
+        _prepared: &Self::PreparedSetup,
+        domain_len: usize,
+        basis: usize,
+    ) -> Result<
+        Option<
+            Arc<dyn akita_prover::protocol::sumcheck::digit_range::ClassIndexedDigitTreeFactory<F>>,
+        >,
+        AkitaError,
+    > {
+        self.digit_tree_factory(domain_len, basis)
+    }
+
     fn prove_direct_digit_range<T>(
         &self,
         prepared: &Self::PreparedSetup,

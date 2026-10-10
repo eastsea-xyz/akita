@@ -24,6 +24,7 @@ mod coefficient_packing;
 pub(crate) use coefficient_packing::{FieldCoefficientPackingParams, FieldPackingSource};
 pub(crate) mod commands;
 mod commit;
+pub(crate) mod digit_tree;
 mod direct_range;
 mod fold;
 #[path = "packed_onehot/k16.rs"]
@@ -121,7 +122,9 @@ const FP128_DIRECT_RELATION_SPARSE_SOURCE_KERNEL_NAME: &str =
 const KERNEL_SOURCE: &str = concat!(
     include_str!("kernels/onehot.metal"),
     "\n",
-    include_str!("kernels/field_packing.metal")
+    include_str!("kernels/field_packing.metal"),
+    "\n",
+    include_str!("kernels/digit_tree.metal")
 );
 /// Largest D512 panel threadgroup; each GPU gets what its compiled pipeline
 /// allows (register pressure: 640 on M1 Max), rounded down to whole simdgroups.
@@ -980,6 +983,8 @@ struct RecursiveCommitResources {
 }
 
 pub(crate) struct MetalRuntime {
+    digit_tree_library: metal::Library,
+    digit_tree_pipelines: std::sync::Mutex<Option<std::sync::Arc<digit_tree::DigitTreePipelines>>>,
     device: Device,
     queue: CommandQueue,
     direct_pipeline: ComputePipelineState,
@@ -1060,6 +1065,8 @@ impl MetalRuntime {
             recursive_commit_resources(&device, 128),
         ];
         Ok(Self {
+            digit_tree_library: library.clone(),
+            digit_tree_pipelines: std::sync::Mutex::new(None),
             queue: device.new_command_queue(),
             direct_pipeline: pipeline(DIRECT_KERNEL_NAME)?,
             block_batched_pipeline: pipeline(BLOCK_BATCHED_KERNEL_NAME)?,

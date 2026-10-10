@@ -1,6 +1,7 @@
 //! Class-indexed product-subcheck prover and specialized coefficient kernels.
 
 use super::class_indexed_state::ClassIndexedTableState;
+use super::class_indexed_state::{ClassIndexedHostStage, ResidentDigitTreeState};
 use super::compact_digit_source::CompactDigitSource;
 use super::exact_prefix::ExactPrefixTable;
 use super::range_class_tables::{
@@ -8,6 +9,9 @@ use super::range_class_tables::{
     SecondRoundProductQuartetCoefficients,
 };
 use super::round_accumulation::accumulate_equality_weighted_round;
+use super::rounds::{
+    ClassIndexedDigitTreeFactory, ClassIndexedDigitTreeInput, ClassIndexedDigitTreeRound,
+};
 use super::{MAX_QUARTET_TABLE_CLASS_COUNT, MAX_TREE_STAGE_Q_DEGREE};
 use akita_algebra::split_eq::GruenSplitEq;
 use akita_error::AkitaError;
@@ -155,7 +159,10 @@ impl<E: Field + Ring + Fold + Unreduced, const LANES: usize> EqFactoredSumcheckI
         self.split_eq.current_tau()
     }
 
-    fn compute_round_eq_factored(&mut self, round: usize) -> EqFactoredUniPoly<E> {
+    fn compute_round_eq_factored(
+        &mut self,
+        round: usize,
+    ) -> Result<EqFactoredUniPoly<E>, AkitaError> {
         debug_assert_eq!(round, self.rounds_completed);
         let (equality_prefix_weights, equality_suffix_weights) =
             self.split_eq.remaining_eq_tables();
@@ -220,10 +227,12 @@ impl<E: Field + Ring + Fold + Unreduced, const LANES: usize> EqFactoredSumcheckI
                 )
             }
         };
-        EqFactoredUniPoly::from_q_coeffs(coefficients[..=self.arity].to_vec())
+        Ok(EqFactoredUniPoly::from_q_coeffs(
+            coefficients[..=self.arity].to_vec(),
+        ))
     }
 
-    fn ingest_challenge(&mut self, round: usize, challenge: E) {
+    fn ingest_challenge(&mut self, round: usize, challenge: E) -> Result<(), AkitaError> {
         debug_assert_eq!(round, self.rounds_completed);
         self.split_eq.bind(challenge);
         if self.rounds_completed == 0 && self.num_rounds >= 2 {
@@ -299,7 +308,7 @@ impl<E: Field + Ring + Fold + Unreduced, const LANES: usize> EqFactoredSumcheckI
             if let Some(deferred) = deferred {
                 self.product_table = deferred;
                 self.rounds_completed += 1;
-                return;
+                return Ok(());
             }
         }
 
@@ -344,7 +353,7 @@ impl<E: Field + Ring + Fold + Unreduced, const LANES: usize> EqFactoredSumcheckI
             if let Some(table) = folded_after_two_rounds {
                 self.product_table = ProductTableState::Materialized(table);
                 self.rounds_completed += 1;
-                return;
+                return Ok(());
             }
         }
 
@@ -403,5 +412,58 @@ impl<E: Field + Ring + Fold + Unreduced, const LANES: usize> EqFactoredSumcheckI
                 .expect("validated exact-prefix product state can fold");
         }
         self.rounds_completed += 1;
+        Ok(())
+    }
+}
+
+impl<E: Field + Ring + Fold + Unreduced, const LANES: usize> ClassIndexedHostStage<E>
+    for ClassIndexedProductSubcheckProver<E, LANES>
+{
+    fn can_start_resident(&self) -> bool {
+        self.rounds_completed == 2
+            && matches!(&self.product_table, ProductTableState::Materialized(table) if table.explicit_len() >= 4_096 && table.domain_len() >= 2)
+    }
+
+    fn into_resident(
+        self,
+        factory: &dyn ClassIndexedDigitTreeFactory<E>,
+    ) -> Result<ResidentDigitTreeState<E>, AkitaError> {
+        let Self {
+            product_table,
+            parent_weights,
+            split_eq,
+            arity,
+            rounds_completed,
+            ..
+        } = self;
+        let ProductTableState::Materialized(table) = product_table else {
+            return Err(AkitaError::InvalidProof);
+        };
+        let padding = table.default_value();
+        let session = factory.start(ClassIndexedDigitTreeInput {
+            domain_len: table.domain_len(),
+            explicit: table.explicit_values().as_flattened(),
+            padding: &padding,
+            round: ClassIndexedDigitTreeRound::Product {
+                arity,
+                parent_weights,
+            },
+        })?;
+        Ok(ResidentDigitTreeState {
+            session,
+            split_eq,
+            explicit_len: table.explicit_len(),
+            domain_len: table.domain_len(),
+            lanes: LANES,
+            next_round: rounds_completed,
+            final_value: None,
+        })
+    }
+
+    fn host_final_values(&self) -> Result<Vec<E>, AkitaError> {
+        self.product_table
+            .final_value()
+            .ok_or(AkitaError::InvalidProof)?;
+        Ok(self.final_child_claims())
     }
 }

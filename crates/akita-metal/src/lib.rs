@@ -40,6 +40,8 @@ mod backend;
 #[cfg(target_os = "macos")]
 mod coefficient_packing;
 #[cfg(target_os = "macos")]
+mod digit_tree;
+#[cfg(target_os = "macos")]
 mod field;
 #[cfg(target_os = "macos")]
 mod onehot;

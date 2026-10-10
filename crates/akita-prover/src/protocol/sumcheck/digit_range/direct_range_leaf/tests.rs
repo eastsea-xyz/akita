@@ -145,7 +145,7 @@ fn stage1_round0_matches_dense_reference() {
             ring_bits,
         )
         .unwrap();
-        let stage1_poly = prover.compute_round_eq_factored(0);
+        let stage1_poly = prover.compute_round_eq_factored(0).unwrap();
         let compact_range_image = build_compact_range_image(&compact_digit_witness);
         let reference = compute_range_round_polynomial_from_compact_image(
             &prover.split_eq,
@@ -200,8 +200,8 @@ fn stage1_prefix_aware_rounds_match_explicit_zero_padding() {
             let mut padded_claim = F::zero();
 
             for round in 0..(col_bits + ring_bits) {
-                let prefix_poly = prefix_prover.compute_round_eq_factored(round);
-                let padded_poly = padded_prover.compute_round_eq_factored(round);
+                let prefix_poly = prefix_prover.compute_round_eq_factored(round).unwrap();
+                let padded_poly = padded_prover.compute_round_eq_factored(round).unwrap();
                 assert_eq!(
                     prefix_poly, padded_poly,
                     "round {round} polynomial mismatch live_x_cols={live_x_cols} basis={basis}"
@@ -221,8 +221,8 @@ fn stage1_prefix_aware_rounds_match_explicit_zero_padding() {
                     &padded_poly,
                     challenge,
                 );
-                prefix_prover.ingest_challenge(round, challenge);
-                padded_prover.ingest_challenge(round, challenge);
+                prefix_prover.ingest_challenge(round, challenge).unwrap();
+                padded_prover.ingest_challenge(round, challenge).unwrap();
             }
 
             assert_eq!(
@@ -291,8 +291,8 @@ fn stage1_prefix_x_rounds_allow_ring_bits_at_least_col_bits() {
         let mut padded_claim = F::zero();
 
         for round in 0..(col_bits + ring_bits) {
-            let prefix_poly = prefix_prover.compute_round_eq_factored(round);
-            let padded_poly = padded_prover.compute_round_eq_factored(round);
+            let prefix_poly = prefix_prover.compute_round_eq_factored(round).unwrap();
+            let padded_poly = padded_prover.compute_round_eq_factored(round).unwrap();
             assert_eq!(
                 prefix_poly, padded_poly,
                 "round {round} polynomial mismatch live_x_cols={live_x_cols} basis={basis}"
@@ -312,8 +312,8 @@ fn stage1_prefix_x_rounds_allow_ring_bits_at_least_col_bits() {
                 &padded_poly,
                 challenge,
             );
-            prefix_prover.ingest_challenge(round, challenge);
-            padded_prover.ingest_challenge(round, challenge);
+            prefix_prover.ingest_challenge(round, challenge).unwrap();
+            padded_prover.ingest_challenge(round, challenge).unwrap();
         }
 
         assert_eq!(
@@ -359,11 +359,11 @@ fn stage1_fused_round2_transition_matches_two_pass_reference() {
             ring_bits,
         )
         .unwrap();
-        let round0 = prover.compute_round_eq_factored(0);
+        let round0 = prover.compute_round_eq_factored(0).unwrap();
         let r0 = F::from_u64(61);
         let claim1 = advance_eq_factored_claim(F::zero(), prover.current_tau(), &round0, r0);
-        prover.ingest_challenge(0, r0);
-        let round1 = prover.compute_round_eq_factored(1);
+        prover.ingest_challenge(0, r0).unwrap();
+        let round1 = prover.compute_round_eq_factored(1).unwrap();
         let r1 = F::from_u64(67);
         let _claim2 = advance_eq_factored_claim(claim1, prover.current_tau(), &round1, r1);
 
@@ -389,7 +389,7 @@ fn stage1_fused_round2_transition_matches_two_pass_reference() {
         expected.rounds_completed = 2;
         let expected_round2 = expected.compute_round_materialized_prefix_x(&expected_range_image);
 
-        prover.ingest_challenge(1, r1);
+        prover.ingest_challenge(1, r1).unwrap();
 
         match &prover.range_image {
             LowBasisRangeImageStorage::Materialized(range_image) => {
@@ -434,16 +434,16 @@ fn stage1_low_basis_range_image_third_round_deferral_matches_materialized_refere
             ring_bits,
         )
         .unwrap();
-        deferred.compute_round_eq_factored(0);
-        deferred.ingest_challenge(0, r0);
-        deferred.compute_round_eq_factored(1);
-        deferred.ingest_challenge(1, r1);
+        deferred.compute_round_eq_factored(0).unwrap();
+        deferred.ingest_challenge(0, r0).unwrap();
+        deferred.compute_round_eq_factored(1).unwrap();
+        deferred.ingest_challenge(1, r1).unwrap();
 
         assert!(matches!(
             deferred.range_image,
             LowBasisRangeImageStorage::Compact(_)
         ));
-        let deferred_round2 = deferred.compute_round_eq_factored(2);
+        let deferred_round2 = deferred.compute_round_eq_factored(2).unwrap();
 
         let round2_range_image = LowBasisRangeCheckProver::<F>::fold_compact_range_image_to_round2(
             &compact_range_image,
@@ -474,7 +474,7 @@ fn stage1_low_basis_range_image_third_round_deferral_matches_materialized_refere
                 y_len / 4,
                 r2,
             );
-        deferred.ingest_challenge(2, r2);
+        deferred.ingest_challenge(2, r2).unwrap();
         match &deferred.range_image {
             LowBasisRangeImageStorage::Materialized(actual) => {
                 assert_eq!(actual, &expected_round3_range_image)
@@ -511,17 +511,17 @@ fn stage1_later_materialized_prefix_fusion_matches_two_pass_reference() {
             ring_bits,
         )
         .unwrap();
-        let round0 = prover.compute_round_eq_factored(0);
+        let round0 = prover.compute_round_eq_factored(0).unwrap();
         let r0 = F::from_u64(107);
         let claim1 = advance_eq_factored_claim(F::zero(), prover.current_tau(), &round0, r0);
-        prover.ingest_challenge(0, r0);
+        prover.ingest_challenge(0, r0).unwrap();
 
-        let round1 = prover.compute_round_eq_factored(1);
+        let round1 = prover.compute_round_eq_factored(1).unwrap();
         let r1 = F::from_u64(109);
         let claim2 = advance_eq_factored_claim(claim1, prover.current_tau(), &round1, r1);
-        prover.ingest_challenge(1, r1);
+        prover.ingest_challenge(1, r1).unwrap();
 
-        let round2 = prover.compute_round_eq_factored(2);
+        let round2 = prover.compute_round_eq_factored(2).unwrap();
         let r2 = F::from_u64(113);
         let claim3 = advance_eq_factored_claim(claim2, prover.current_tau(), &round2, r2);
 
@@ -534,13 +534,13 @@ fn stage1_later_materialized_prefix_fusion_matches_two_pass_reference() {
             ring_bits,
         )
         .unwrap();
-        let expected_round0 = expected.compute_round_eq_factored(0);
+        let expected_round0 = expected.compute_round_eq_factored(0).unwrap();
         assert_eq!(expected_round0, round0);
-        expected.ingest_challenge(0, r0);
-        let expected_round1 = expected.compute_round_eq_factored(1);
+        expected.ingest_challenge(0, r0).unwrap();
+        let expected_round1 = expected.compute_round_eq_factored(1).unwrap();
         assert_eq!(expected_round1, round1);
-        expected.ingest_challenge(1, r1);
-        let expected_round2 = expected.compute_round_eq_factored(2);
+        expected.ingest_challenge(1, r1).unwrap();
+        let expected_round2 = expected.compute_round_eq_factored(2).unwrap();
         assert_eq!(expected_round2, round2);
 
         let current_range_image = match &expected.range_image {
@@ -563,7 +563,7 @@ fn stage1_later_materialized_prefix_fusion_matches_two_pass_reference() {
         let expected_round3 =
             expected.compute_round_materialized_prefix_x(&expected_next_range_image);
 
-        prover.ingest_challenge(2, r2);
+        prover.ingest_challenge(2, r2).unwrap();
 
         match &prover.range_image {
             LowBasisRangeImageStorage::Materialized(range_image) => {
@@ -603,17 +603,17 @@ fn stage1_sparse_x_y_fusion_matches_two_pass_reference() {
             ring_bits,
         )
         .unwrap();
-        let round0 = prover.compute_round_eq_factored(0);
+        let round0 = prover.compute_round_eq_factored(0).unwrap();
         let r0 = F::from_u64(137);
         let claim1 = advance_eq_factored_claim(F::zero(), prover.current_tau(), &round0, r0);
-        prover.ingest_challenge(0, r0);
+        prover.ingest_challenge(0, r0).unwrap();
 
-        let round1 = prover.compute_round_eq_factored(1);
+        let round1 = prover.compute_round_eq_factored(1).unwrap();
         let r1 = F::from_u64(139);
         let claim2 = advance_eq_factored_claim(claim1, prover.current_tau(), &round1, r1);
-        prover.ingest_challenge(1, r1);
+        prover.ingest_challenge(1, r1).unwrap();
 
-        let round2 = prover.compute_round_eq_factored(2);
+        let round2 = prover.compute_round_eq_factored(2).unwrap();
         let r2 = F::from_u64(149);
         let _claim3 = advance_eq_factored_claim(claim2, prover.current_tau(), &round2, r2);
 
@@ -626,13 +626,13 @@ fn stage1_sparse_x_y_fusion_matches_two_pass_reference() {
             ring_bits,
         )
         .unwrap();
-        let expected_round0 = expected.compute_round_eq_factored(0);
+        let expected_round0 = expected.compute_round_eq_factored(0).unwrap();
         assert_eq!(expected_round0, round0);
-        expected.ingest_challenge(0, r0);
-        let expected_round1 = expected.compute_round_eq_factored(1);
+        expected.ingest_challenge(0, r0).unwrap();
+        let expected_round1 = expected.compute_round_eq_factored(1).unwrap();
         assert_eq!(expected_round1, round1);
-        expected.ingest_challenge(1, r1);
-        let expected_round2 = expected.compute_round_eq_factored(2);
+        expected.ingest_challenge(1, r1).unwrap();
+        let expected_round2 = expected.compute_round_eq_factored(2).unwrap();
         assert_eq!(expected_round2, round2);
 
         let current_range_image = match &expected.range_image {
@@ -659,7 +659,7 @@ fn stage1_sparse_x_y_fusion_matches_two_pass_reference() {
         let expected_round3 =
             expected.compute_round_materialized_sparse_x_y(&expected_next_range_image);
 
-        prover.ingest_challenge(2, r2);
+        prover.ingest_challenge(2, r2).unwrap();
 
         match &prover.range_image {
             LowBasisRangeImageStorage::Materialized(range_image) => {
