@@ -29,6 +29,11 @@ mod direct_range;
 mod fold;
 #[path = "packed_onehot/k16.rs"]
 mod k16;
+mod recursive_fold;
+pub(crate) use recursive_fold::{
+    RecursiveFoldDispatchOutcome, RecursiveFoldParams, RecursiveFoldSource, RecursiveSparseTerm,
+    RecursiveWeightTerm,
+};
 mod relation_prefix;
 mod relation_resident;
 mod relation_rounds;
@@ -140,7 +145,9 @@ const KERNEL_SOURCE: &str = concat!(
     "\n",
     include_str!("kernels/relation_rows.metal"),
     "\n",
-    include_str!("kernels/witness_pack.metal")
+    include_str!("kernels/witness_pack.metal"),
+    "\n",
+    include_str!("kernels/recursive_fold.metal")
 );
 /// Largest D512 panel threadgroup; each GPU gets what its compiled pipeline
 /// allows (register pressure: 640 on M1 Max), rounded down to whole simdgroups.
@@ -1035,6 +1042,12 @@ pub(crate) struct MetalRuntime {
     fp128_relation_rows_matvec_inverse_pipeline: ComputePipelineState,
     fp128_relation_rows_reconstruct_pipeline: ComputePipelineState,
     witness_pack_pipeline: ComputePipelineState,
+    recursive_evaluate_fold_pipeline: ComputePipelineState,
+    recursive_fold_evaluation_pipeline: ComputePipelineState,
+    recursive_balanced_planes_pipeline: ComputePipelineState,
+    recursive_sparse_fold_pipeline: ComputePipelineState,
+    recursive_sparse_batch_reduce_pipeline: ComputePipelineState,
+    recursive_packed_cache: std::sync::Mutex<Vec<recursive_fold::RecursivePackedCacheEntry>>,
     fp128_recursive_commit_matrix_ntt_pipeline: ComputePipelineState,
     fp128_recursive_commit_matvec_pipeline: ComputePipelineState,
     fp128_recursive_commit_d512_matvec_pipeline: ComputePipelineState,
@@ -1174,6 +1187,14 @@ impl MetalRuntime {
                 FP128_RELATION_ROWS_RECONSTRUCT_KERNEL_NAME,
             )?,
             witness_pack_pipeline: pipeline("akita_centered_witness_z_pack")?,
+            recursive_evaluate_fold_pipeline: pipeline("akita_fp128_recursive_evaluate_fold")?,
+            recursive_fold_evaluation_pipeline: pipeline("akita_fp128_recursive_fold_evaluation")?,
+            recursive_balanced_planes_pipeline: pipeline("akita_fp128_recursive_balanced_planes")?,
+            recursive_sparse_fold_pipeline: pipeline("akita_fp128_recursive_sparse_fold")?,
+            recursive_sparse_batch_reduce_pipeline: pipeline(
+                "akita_recursive_sparse_batch_reduce",
+            )?,
+            recursive_packed_cache: std::sync::Mutex::new(Vec::new()),
             fp128_recursive_commit_matrix_ntt_pipeline: pipeline(
                 FP128_RECURSIVE_COMMIT_MATRIX_NTT_KERNEL_NAME,
             )?,

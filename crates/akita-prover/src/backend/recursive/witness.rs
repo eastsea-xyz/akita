@@ -221,6 +221,33 @@ impl<'a, F: Field, const D: usize> SuffixWitnessView<'a, F, D> {
         self.digits.get(index)
     }
 
+    /// Retain exact packed storage and physical/live extents for an opening kernel.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a sliced view whose encoded source starts at a nonzero digit.
+    #[expect(
+        clippy::type_complexity,
+        reason = "one checked boundary carries packed storage and exact extents"
+    )]
+    pub fn packed_fold_storage(
+        &self,
+    ) -> Result<(std::sync::Arc<[u8]>, u8, usize, usize, usize), AkitaError> {
+        let (owner, width, start, stored) = self.digits.encoded_storage();
+        if start != 0 {
+            return Err(AkitaError::InvalidInput(
+                "recursive packed opening source starts at a nonzero digit".into(),
+            ));
+        }
+        Ok((
+            owner.clone(),
+            width,
+            stored,
+            self.digits.len(),
+            self.live_ring_elems,
+        ))
+    }
+
     pub fn num_ring_elems(&self) -> usize {
         self.padded_ring_elems
     }

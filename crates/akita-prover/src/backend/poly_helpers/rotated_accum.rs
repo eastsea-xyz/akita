@@ -7,8 +7,10 @@ use jolt_field::{CanonicalEncoding, Field};
 
 const D64_ROTATED_CHALLENGE_MIN_WEIGHT: usize = 42;
 
+/// Whether partitioned recursive folding selects the existing D64 rotated route.
+#[doc(hidden)]
 #[inline(always)]
-pub(crate) fn should_use_rotated_challenge<const D: usize>(challenge: &SparseChallenge) -> bool {
+pub fn should_use_rotated_challenge<const D: usize>(challenge: &SparseChallenge) -> bool {
     (D == 64 && challenge.positions.len() >= D64_ROTATED_CHALLENGE_MIN_WEIGHT)
         && challenge.positions.len() == challenge.coeffs.len()
 }

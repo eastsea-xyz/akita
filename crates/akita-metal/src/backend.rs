@@ -7,7 +7,7 @@ use akita_algebra::CyclotomicRing;
 use akita_error::AkitaError;
 use akita_prover::backend::{
     DenseBatchView, DenseView, MultilinearPolynomialBatchView, MultilinearPolynomialView,
-    OneHotBatchView, OneHotView, RecursiveFoldView,
+    OneHotBatchView, OneHotView,
 };
 use akita_prover::compute::{
     CompressionComputeBackend, CompressionRowsProducts, DecomposeFoldBatchPlan, DecomposeFoldPlan,
@@ -18,8 +18,8 @@ use akita_prover::{
     DecomposeFoldWitness, DigitRowsComputeBackend, DirectDigitRangeProofBackend,
     DirectDigitRangeProofInput, DirectRelationRangePreparationInput,
     DirectRelationRangeProofBackend, DirectRelationRangeProofOutput, DirectRelationRangeProofState,
-    NttCacheOwnerId, NttOperationCluster, OneHotIndex, RecursiveFoldBatchView,
-    RelationRangeImageProver, RoutedNttRequirement, SuffixWitnessBatchView, SuffixWitnessView,
+    NttCacheOwnerId, NttOperationCluster, OneHotIndex, RelationRangeImageProver,
+    RoutedNttRequirement,
 };
 use akita_sumcheck::{
     CompressedUniPoly, EqFactoredSumcheckProof, EqFactoredUniPoly, SumcheckProof,
@@ -1419,14 +1419,6 @@ macro_rules! delegate_indexed_opening_pair_to_cpu {
 }
 
 delegate_opening_pair_to_cpu!(DenseView<'_, F, D>, DenseBatchView<'_, F, D>);
-delegate_opening_pair_to_cpu!(
-    RecursiveFoldView<'_, F, D>,
-    RecursiveFoldBatchView<'_, F, D>
-);
-delegate_opening_pair_to_cpu!(
-    SuffixWitnessView<'_, F, D>,
-    SuffixWitnessBatchView<'_, F, D>
-);
 delegate_indexed_opening_pair_to_cpu!(OneHotView<'_, F, D, I>, OneHotBatchView<'_, F, D, I>);
 delegate_indexed_opening_pair_to_cpu!(
     MultilinearPolynomialView<'_, F, D, I>,

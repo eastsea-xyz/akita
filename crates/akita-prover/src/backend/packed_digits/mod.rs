@@ -534,6 +534,16 @@ impl<'a> PackedSignedDigitView<'a> {
         self.len.div_ceil(DIGITS_PER_BLOCK)
     }
 
+    /// Retain immutable encoded storage without decoding or materializing padding.
+    pub(crate) fn encoded_storage(self) -> (&'a Arc<[u8]>, u8, usize, usize) {
+        (
+            &self.digits.storage,
+            self.digits.bit_width,
+            self.start,
+            self.digits.len,
+        )
+    }
+
     pub(crate) fn bounds(self) -> SignedDigitBounds {
         self.digits.bounds
     }

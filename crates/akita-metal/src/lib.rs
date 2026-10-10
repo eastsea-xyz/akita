@@ -56,6 +56,8 @@ mod prepared;
 #[cfg(target_os = "macos")]
 mod recursive_commit;
 #[cfg(target_os = "macos")]
+mod recursive_fold;
+#[cfg(target_os = "macos")]
 mod ring_switch;
 #[cfg(target_os = "macos")]
 #[expect(
@@ -99,3 +101,6 @@ mod unsupported {
 
 #[cfg(not(target_os = "macos"))]
 pub use unsupported::MetalBackend;
+
+#[cfg(all(test, target_os = "macos"))]
+mod recursive_fold_admission_tests;

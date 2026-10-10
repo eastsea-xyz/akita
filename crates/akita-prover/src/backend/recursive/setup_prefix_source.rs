@@ -61,18 +61,11 @@ impl<F: Field> RecursiveFoldSource<F> {
         let Self::SetupPrefix { expanded, slot } = self else {
             return Ok(None);
         };
-        let rings = setup_prefix_rings::<F, D>(
-            expanded.shared_matrix(),
-            slot.id.natural_len,
-            slot.id.n_prefix()?,
-        )?;
-        let (positions, blocks) = setup_prefix_fold_geometry::<D>(slot, rings.len())?;
-        let fields = expanded
-            .shared_matrix()
-            .as_field_slice()
-            .get(..slot.id.n_prefix()?)
-            .ok_or(AkitaError::InvalidProof)?;
-        Ok(Some((fields, positions, blocks)))
+        let view: RecursiveFoldView<'_, F, D> = RecursiveFoldView::SetupPrefix {
+            expanded: expanded.as_ref(),
+            slot: slot.as_ref(),
+        };
+        view.setup_prefix_fold_coefficients()
     }
 
     pub(crate) fn witness(witness: Arc<RecursiveWitnessFlat>) -> Self {
@@ -88,6 +81,37 @@ pub enum RecursiveFoldView<'a, F: Field, const D: usize> {
         slot: &'a SetupPrefixSlot<F>,
     },
     Witness(SuffixWitnessView<'a, F, D>),
+}
+
+impl<'a, F: Field, const D: usize> RecursiveFoldView<'a, F, D> {
+    /// Borrow checked physical prefix fields and frozen opening block geometry.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid prefix domains, matrix extents, and commitment geometry.
+    #[expect(
+        clippy::type_complexity,
+        reason = "prefix fields and frozen block geometry share one checked boundary"
+    )]
+    pub fn setup_prefix_fold_coefficients(
+        self,
+    ) -> Result<Option<(&'a [F], usize, usize)>, AkitaError> {
+        let Self::SetupPrefix { expanded, slot } = self else {
+            return Ok(None);
+        };
+        let rings = setup_prefix_rings::<F, D>(
+            expanded.shared_matrix(),
+            slot.id.natural_len,
+            slot.id.n_prefix()?,
+        )?;
+        let (positions, blocks) = setup_prefix_fold_geometry::<D>(slot, rings.len())?;
+        let fields = expanded
+            .shared_matrix()
+            .as_field_slice()
+            .get(..slot.id.n_prefix()?)
+            .ok_or(AkitaError::InvalidProof)?;
+        Ok(Some((fields, positions, blocks)))
+    }
 }
 
 #[doc(hidden)]
