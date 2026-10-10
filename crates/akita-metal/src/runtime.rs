@@ -21,6 +21,7 @@ use crate::MetalCommitError;
 
 mod buffers;
 mod coefficient_packing;
+pub(crate) use coefficient_packing::{FieldCoefficientPackingParams, FieldPackingSource};
 pub(crate) mod commands;
 mod commit;
 mod direct_range;
@@ -49,6 +50,9 @@ const FP128_D128_SUBRING64_DECOMPOSE_FOLD_KERNEL_NAME: &str =
     "akita_fp128_d128_subring64_decompose_fold";
 const FP128_D64_DIGIT_ROWS_PARTIALS_KERNEL_NAME: &str = "akita_fp128_d64_digit_rows_partials";
 const FP128_D64_DIGIT_ROWS_REDUCE_KERNEL_NAME: &str = "akita_fp128_d64_digit_rows_reduce";
+const FP128_FIELD_COEFFICIENT_PACKING_KERNEL_NAME: &str = "akita_fp128_field_coefficient_packing";
+const FP128_PACKED_DIGIT_COEFFICIENT_PACKING_KERNEL_NAME: &str =
+    "akita_fp128_packed_digit_coefficient_packing";
 const FP128_I8_COEFFICIENT_PACKING_KERNEL_NAME: &str = "akita_fp128_i8_coefficient_packing";
 const FP128_PACKED_ONEHOT_COEFFICIENT_PACKING_PARTIALS_KERNEL_NAME: &str =
     "akita_fp128_packed_onehot_coefficient_packing_partials";
@@ -114,7 +118,11 @@ const FP128_DIRECT_RELATION_SETUP_SOURCE_KERNEL_NAME: &str =
     "akita_fp128_direct_relation_setup_source";
 const FP128_DIRECT_RELATION_SPARSE_SOURCE_KERNEL_NAME: &str =
     "akita_fp128_direct_relation_sparse_source";
-const KERNEL_SOURCE: &str = include_str!("kernels/onehot.metal");
+const KERNEL_SOURCE: &str = concat!(
+    include_str!("kernels/onehot.metal"),
+    "\n",
+    include_str!("kernels/field_packing.metal")
+);
 /// Largest D512 panel threadgroup; each GPU gets what its compiled pipeline
 /// allows (register pressure: 640 on M1 Max), rounded down to whole simdgroups.
 const FP128_D512_THREADS: usize = 1_024;
@@ -981,6 +989,8 @@ pub(crate) struct MetalRuntime {
     packed_partial_reduction_pipeline: ComputePipelineState,
     fp128_d64_digit_rows_partials_pipeline: ComputePipelineState,
     fp128_d64_digit_rows_reduce_pipeline: ComputePipelineState,
+    fp128_field_coefficient_packing_pipeline: ComputePipelineState,
+    fp128_packed_digit_coefficient_packing_pipeline: ComputePipelineState,
     fp128_i8_coefficient_packing_pipeline: ComputePipelineState,
     fp128_packed_onehot_coefficient_packing_partials_pipeline: ComputePipelineState,
     fp128_packed_onehot_coefficient_packing_reduce_pipeline: ComputePipelineState,
@@ -1061,6 +1071,12 @@ impl MetalRuntime {
             )?,
             fp128_d64_digit_rows_reduce_pipeline: pipeline(
                 FP128_D64_DIGIT_ROWS_REDUCE_KERNEL_NAME,
+            )?,
+            fp128_field_coefficient_packing_pipeline: pipeline(
+                FP128_FIELD_COEFFICIENT_PACKING_KERNEL_NAME,
+            )?,
+            fp128_packed_digit_coefficient_packing_pipeline: pipeline(
+                FP128_PACKED_DIGIT_COEFFICIENT_PACKING_KERNEL_NAME,
             )?,
             fp128_i8_coefficient_packing_pipeline: pipeline(
                 FP128_I8_COEFFICIENT_PACKING_KERNEL_NAME,

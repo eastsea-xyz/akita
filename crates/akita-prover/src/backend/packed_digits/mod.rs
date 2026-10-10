@@ -134,7 +134,6 @@ impl PackedSignedDigits {
         self.len == 0
     }
 
-    #[cfg(test)]
     pub(crate) fn bit_width(&self) -> u8 {
         self.bit_width
     }
@@ -143,7 +142,6 @@ impl PackedSignedDigits {
         self.bounds
     }
 
-    #[cfg(test)]
     pub(crate) fn encoded_bytes(&self) -> &[u8] {
         &self.storage[..self.encoded_len]
     }

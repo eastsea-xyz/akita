@@ -169,6 +169,13 @@ impl MetalBackend {
     }
 }
 
+#[path = "coefficient_packing/recursive.rs"]
+mod recursive;
+
+#[cfg(test)]
+#[path = "coefficient_packing/field_tests.rs"]
+mod field_tests;
+
 #[cfg(test)]
 mod tests {
     use akita_types::{

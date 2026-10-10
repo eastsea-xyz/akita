@@ -12,8 +12,6 @@ use akita_prover::backend::{
 use akita_prover::compute::{
     CompressionComputeBackend, CompressionRowsProducts, DecomposeFoldBatchPlan, DecomposeFoldPlan,
     OpeningBatchKernel, OpeningFoldKernel, OpeningFoldOutput, OpeningFoldPlan,
-    SubringCoefficientPackingBatchKernel, SubringCoefficientPackingPartials,
-    SubringCoefficientPackingPlan,
 };
 use akita_prover::{
     BatchDecomposeFoldOutcome, ComputeBackendSetup, CpuBackend, CyclicRowsComputeBackend,
@@ -28,7 +26,7 @@ use akita_sumcheck::{
 };
 use akita_transcript::labels;
 use akita_types::{AkitaExpandedSetup, AkitaStage1Proof, AkitaStage1StageProof, NttCacheKey};
-use jolt_field::{ExtField, Zero};
+use jolt_field::Zero;
 use metal::Device;
 
 use crate::field::F;
@@ -1404,36 +1402,6 @@ delegate_indexed_opening_pair_to_cpu!(
     MultilinearPolynomialView<'_, F, D, I>,
     MultilinearPolynomialBatchView<'_, F, D, I>
 );
-
-macro_rules! delegate_coefficient_packing_to_cpu {
-    ($view:ident) => {
-        impl<E, const D: usize> SubringCoefficientPackingBatchKernel<$view<'_, F, D>, F, E, D>
-            for MetalBackend
-        where
-            E: ExtField<F>,
-            CpuBackend: for<'a> SubringCoefficientPackingBatchKernel<$view<'a, F, D>, F, E, D>,
-        {
-            fn coefficient_packing_partials_batch(
-                &self,
-                prepared: Option<&Self::PreparedSetup>,
-                source: $view<'_, F, D>,
-                plan: SubringCoefficientPackingPlan<'_, E>,
-            ) -> Result<Vec<SubringCoefficientPackingPartials<F>>, AkitaError> {
-                let output = self.cpu_backend().coefficient_packing_partials_batch(
-                    prepared.map(|prepared| &prepared.cpu),
-                    source,
-                    plan,
-                )?;
-                self.record_opening_cpu_fallback(1)
-                    .map_err(MetalCommitError::into_akita)?;
-                Ok(output)
-            }
-        }
-    };
-}
-
-delegate_coefficient_packing_to_cpu!(RecursiveFoldBatchView);
-delegate_coefficient_packing_to_cpu!(SuffixWitnessBatchView);
 
 #[cfg(test)]
 mod tests;
