@@ -37,11 +37,18 @@ fn constant_buffer<T>(device: &Device, values: &[T]) -> Buffer {
     )
 }
 
-pub(super) fn d512_linear_relation_resources(device: &Device) -> D512LinearRelationResources {
+pub(super) fn linear_relation_resources(
+    device: &Device,
+    ntt_size: usize,
+) -> D512LinearRelationResources {
+    assert!(matches!(ntt_size, 128 | 256 | 512 | 1024));
+    assert!(FP128_D512_LINEAR_RELATION_RAW_PRIMES
+        .iter()
+        .all(|prime| (*prime as usize - 1).is_multiple_of(ntt_size)));
     let primes = FP128_D512_LINEAR_RELATION_RAW_PRIMES.map(NttPrime::<i32>::compute);
     let mut device_primes = Vec::with_capacity(primes.len());
-    let mut fwd_twiddles = Vec::with_capacity(primes.len() * FP128_D512_LINEAR_RELATION_NTT_SIZE);
-    let mut inv_twiddles = Vec::with_capacity(primes.len() * FP128_D512_LINEAR_RELATION_NTT_SIZE);
+    let mut fwd_twiddles = Vec::with_capacity(primes.len() * ntt_size);
+    let mut inv_twiddles = Vec::with_capacity(primes.len() * ntt_size);
     let mut d_inv = Vec::with_capacity(primes.len());
     let mut limb_weights = Vec::with_capacity(primes.len() * 4);
     let mut field_moduli = Vec::with_capacity(primes.len());
@@ -55,14 +62,14 @@ pub(super) fn d512_linear_relation_resources(device: &Device) -> D512LinearRelat
             montsq: prime.montsq,
         });
         let modulus = i64::from(prime.p);
-        let root = primitive_root_of_unity(modulus, FP128_D512_LINEAR_RELATION_NTT_SIZE);
+        let root = primitive_root_of_unity(modulus, ntt_size);
         let root_inverse = pow_mod(root, modulus - 2, modulus);
         let one = prime.from_canonical(1);
-        let mut prime_fwd = vec![0i32; FP128_D512_LINEAR_RELATION_NTT_SIZE];
-        let mut prime_inv = vec![0i32; FP128_D512_LINEAR_RELATION_NTT_SIZE];
-        for stage in 0..FP128_D512_LINEAR_RELATION_NTT_SIZE.ilog2() as usize {
+        let mut prime_fwd = vec![0i32; ntt_size];
+        let mut prime_inv = vec![0i32; ntt_size];
+        for stage in 0..ntt_size.ilog2() as usize {
             let len = 1usize << stage;
-            let exponent = (FP128_D512_LINEAR_RELATION_NTT_SIZE / (2 * len)) as i64;
+            let exponent = (ntt_size / (2 * len)) as i64;
             let fwd_step = prime.from_canonical(pow_mod(root, exponent, modulus) as i32);
             let inv_step = prime.from_canonical(pow_mod(root_inverse, exponent, modulus) as i32);
             let mut fwd = one;
@@ -76,11 +83,7 @@ pub(super) fn d512_linear_relation_resources(device: &Device) -> D512LinearRelat
         }
         fwd_twiddles.extend(prime_fwd);
         inv_twiddles.extend(prime_inv);
-        let inverse = prime.from_canonical(pow_mod(
-            FP128_D512_LINEAR_RELATION_NTT_SIZE as i64,
-            modulus - 2,
-            modulus,
-        ) as i32);
+        let inverse = prime.from_canonical(pow_mod(ntt_size as i64, modulus - 2, modulus) as i32);
         d_inv.push(inverse.raw());
 
         let radix = (1u128 << 32) % prime.p as u128;

@@ -32,14 +32,16 @@ mod k16;
 mod relation_prefix;
 mod relation_resident;
 mod relation_rounds;
+mod relation_rows;
 mod relation_setup;
 mod resources;
 mod rows;
+pub(crate) use relation_rows::{RelationRowsInput, RelationRowsMode, RelationRowsParams};
 #[cfg(test)]
 mod tests;
 
 use commands::*;
-use resources::{d512_linear_relation_resources, recursive_commit_resources};
+use resources::{linear_relation_resources, recursive_commit_resources};
 
 const DIRECT_KERNEL_NAME: &str = "akita_onehot_commit_gather";
 const BLOCK_BATCHED_KERNEL_NAME: &str = "akita_onehot_commit_block_batched";
@@ -79,6 +81,11 @@ const FP128_D512_LINEAR_RELATION_REDUCE_KERNEL_NAME: &str =
     "akita_fp128_d512_linear_relation_reduce";
 const FP128_D512_LINEAR_RELATION_RECONSTRUCT_KERNEL_NAME: &str =
     "akita_fp128_d512_linear_relation_reconstruct";
+const FP128_RELATION_ROWS_MATRIX_NTT_KERNEL_NAME: &str = "akita_fp128_relation_rows_matrix_ntt";
+const FP128_RELATION_ROWS_RHS_NTT_KERNEL_NAME: &str = "akita_fp128_relation_rows_rhs_ntt";
+const FP128_RELATION_ROWS_MATVEC_INVERSE_KERNEL_NAME: &str =
+    "akita_fp128_relation_rows_matvec_inverse";
+const FP128_RELATION_ROWS_RECONSTRUCT_KERNEL_NAME: &str = "akita_fp128_relation_rows_reconstruct";
 const FP128_RECURSIVE_COMMIT_MATRIX_NTT_KERNEL_NAME: &str =
     "akita_fp128_recursive_commit_matrix_ntt";
 const FP128_RECURSIVE_COMMIT_MATVEC_KERNEL_NAME: &str = "akita_fp128_recursive_commit_matvec";
@@ -128,7 +135,9 @@ const KERNEL_SOURCE: &str = concat!(
     "\n",
     include_str!("kernels/digit_tree.metal"),
     "\n",
-    include_str!("kernels/recursive_commit_d512.metal")
+    include_str!("kernels/recursive_commit_d512.metal"),
+    "\n",
+    include_str!("kernels/relation_rows.metal")
 );
 /// Largest D512 panel threadgroup; each GPU gets what its compiled pipeline
 /// allows (register pressure: 640 on M1 Max), rounded down to whole simdgroups.
@@ -1017,6 +1026,11 @@ pub(crate) struct MetalRuntime {
     fp128_d512_linear_relation_reduce_pipeline: ComputePipelineState,
     fp128_d512_linear_relation_reconstruct_pipeline: ComputePipelineState,
     fp128_d512_linear_relation_resources: D512LinearRelationResources,
+    fp128_relation_rows_small_resources: [D512LinearRelationResources; 3],
+    fp128_relation_rows_matrix_ntt_pipeline: ComputePipelineState,
+    fp128_relation_rows_rhs_ntt_pipeline: ComputePipelineState,
+    fp128_relation_rows_matvec_inverse_pipeline: ComputePipelineState,
+    fp128_relation_rows_reconstruct_pipeline: ComputePipelineState,
     fp128_recursive_commit_matrix_ntt_pipeline: ComputePipelineState,
     fp128_recursive_commit_matvec_pipeline: ComputePipelineState,
     fp128_recursive_commit_d512_matvec_pipeline: ComputePipelineState,
@@ -1064,7 +1078,12 @@ impl MetalRuntime {
                 .new_compute_pipeline_state_with_function(&function)
                 .map_err(|message| MetalCommitError::PipelineCompilation { name, message })
         };
-        let fp128_d512_linear_relation_resources = d512_linear_relation_resources(&device);
+        let fp128_d512_linear_relation_resources = linear_relation_resources(&device, 1024);
+        let fp128_relation_rows_small_resources = [
+            linear_relation_resources(&device, 128),
+            linear_relation_resources(&device, 256),
+            linear_relation_resources(&device, 512),
+        ];
         let fp128_recursive_commit_resources = [
             recursive_commit_resources(&device, 64),
             recursive_commit_resources(&device, 128),
@@ -1137,6 +1156,19 @@ impl MetalRuntime {
                 FP128_D512_LINEAR_RELATION_RECONSTRUCT_KERNEL_NAME,
             )?,
             fp128_d512_linear_relation_resources,
+            fp128_relation_rows_small_resources,
+            fp128_relation_rows_matrix_ntt_pipeline: pipeline(
+                FP128_RELATION_ROWS_MATRIX_NTT_KERNEL_NAME,
+            )?,
+            fp128_relation_rows_rhs_ntt_pipeline: pipeline(
+                FP128_RELATION_ROWS_RHS_NTT_KERNEL_NAME,
+            )?,
+            fp128_relation_rows_matvec_inverse_pipeline: pipeline(
+                FP128_RELATION_ROWS_MATVEC_INVERSE_KERNEL_NAME,
+            )?,
+            fp128_relation_rows_reconstruct_pipeline: pipeline(
+                FP128_RELATION_ROWS_RECONSTRUCT_KERNEL_NAME,
+            )?,
             fp128_recursive_commit_matrix_ntt_pipeline: pipeline(
                 FP128_RECURSIVE_COMMIT_MATRIX_NTT_KERNEL_NAME,
             )?,

@@ -48,6 +48,9 @@ impl<const D: usize> RingSwitchRelationKernel<RingSwitchRelationView<'_, D>, F, 
         {
             return self.digit_relation_rows(prepared, source.t_hat, plan.n_b, true);
         }
+        if let Some(output) = self.general_relation_rows(prepared, source, plan)? {
+            return Ok(output);
+        }
         let rhs_abs_bound = source
             .z_segment
             .iter()
@@ -470,3 +473,9 @@ mod tests {
         ));
     }
 }
+
+#[path = "ring_switch/general_rows.rs"]
+mod general_rows;
+#[cfg(test)]
+#[path = "ring_switch/general_tests.rs"]
+mod general_tests;

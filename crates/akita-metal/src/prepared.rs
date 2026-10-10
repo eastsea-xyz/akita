@@ -36,6 +36,7 @@ pub struct MetalPreparedSetup {
     pub(crate) expanded: Arc<AkitaExpandedSetup<F>>,
     matrices: Mutex<HashMap<MatrixCacheKey, PreparedMatrix>>,
     recursive_matrices: Mutex<HashMap<MatrixCacheKey, PreparedMatrix>>,
+    linear_matrices: Mutex<HashMap<MatrixCacheKey, PreparedMatrix>>,
 }
 
 impl MetalPreparedSetup {
@@ -45,6 +46,7 @@ impl MetalPreparedSetup {
             expanded,
             matrices: Mutex::new(HashMap::new()),
             recursive_matrices: Mutex::new(HashMap::new()),
+            linear_matrices: Mutex::new(HashMap::new()),
         }
     }
 
@@ -209,6 +211,82 @@ impl MetalPreparedSetup {
         })
     }
 
+    /// Cache zero-padded 2D spectra of a flat matrix prefix. Role-specific row
+    /// strides are supplied at dispatch; the buffer retains its physical ring stride.
+    pub(crate) fn linear_matrix<const D: usize>(
+        &self,
+        runtime: &MetalRuntime,
+        matrix_rings: usize,
+    ) -> Result<MatrixPreparation, AkitaError> {
+        self.expanded
+            .shared_matrix
+            .ring_view_dyn(1, matrix_rings, D)?;
+        let required = checked::product([
+            matrix_rings,
+            2,
+            D,
+            crate::runtime::FP128_D512_LINEAR_RELATION_NUM_PRIMES,
+            size_of::<i32>(),
+        ])
+        .ok_or_else(|| {
+            MetalCommitError::ShapeOverflow("linear matrix spectra bytes").into_akita()
+        })?;
+        let mut matrices = self
+            .linear_matrices
+            .lock()
+            .map_err(|_| MetalCommitError::PoisonedLock.into_akita())?;
+        if let Some(matrix) = matrices
+            .iter()
+            .filter(|(key, matrix)| key.ring_d == D && matrix.bytes >= required)
+            .map(|(_, matrix)| matrix)
+            .min_by_key(|matrix| matrix.bytes)
+        {
+            return Ok(MatrixPreparation {
+                buffer: matrix.buffer.clone(),
+                bytes: matrix.bytes,
+                cache_hit: true,
+                prepare_time: Duration::ZERO,
+            });
+        }
+        let start = Instant::now();
+        let count = checked::product([matrix_rings, D])
+            .ok_or_else(|| MetalCommitError::ShapeOverflow("linear matrix fields").into_akita())?;
+        let fields = self
+            .expanded
+            .shared_matrix
+            .as_field_slice()
+            .get(..count)
+            .ok_or_else(|| AkitaError::InvalidSetup("linear matrix prefix unavailable".into()))?;
+        let input = runtime
+            .shared_slice_buffer(fields)
+            .map_err(MetalCommitError::into_akita)?;
+        let outcome = runtime
+            .prepare_fp128_relation_rows_matrix::<D>(&input.buffer, matrix_rings)
+            .map_err(MetalCommitError::into_akita)?;
+        let buffer = Arc::new(outcome.buffer);
+        let bytes = outcome.allocation_bytes;
+        // A larger flat prefix subsumes every smaller spectrum at this D.
+        // Existing borrowers retain Arc buffers until their synchronous work ends.
+        matrices.retain(|key, _| key.ring_d != D);
+        matrices.insert(
+            MatrixCacheKey {
+                ring_d: D,
+                n_a: 1,
+                active_a_cols: matrix_rings,
+            },
+            PreparedMatrix {
+                buffer: buffer.clone(),
+                bytes,
+            },
+        );
+        Ok(MatrixPreparation {
+            buffer,
+            bytes,
+            cache_hit: false,
+            prepare_time: start.elapsed(),
+        })
+    }
+
     /// Number of independently allocated canonical and transformed matrix prefixes.
     pub fn matrix_cache_entries(&self) -> Result<usize, MetalCommitError> {
         let canonical = self
@@ -221,7 +299,12 @@ impl MetalPreparedSetup {
             .lock()
             .map_err(|_| MetalCommitError::PoisonedLock)?
             .len();
-        checked::sum([canonical, recursive])
+        let linear = self
+            .linear_matrices
+            .lock()
+            .map_err(|_| MetalCommitError::PoisonedLock)?
+            .len();
+        checked::sum([canonical, recursive, linear])
             .ok_or(MetalCommitError::ShapeOverflow("matrix cache entries"))
     }
 
@@ -235,10 +318,15 @@ impl MetalPreparedSetup {
             .recursive_matrices
             .lock()
             .map_err(|_| MetalCommitError::PoisonedLock)?;
+        let linear = self
+            .linear_matrices
+            .lock()
+            .map_err(|_| MetalCommitError::PoisonedLock)?;
         checked::sum(
             canonical
                 .values()
                 .chain(recursive.values())
+                .chain(linear.values())
                 .map(|matrix| matrix.bytes),
         )
         .ok_or(MetalCommitError::ShapeOverflow("matrix cache bytes"))
