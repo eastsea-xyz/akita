@@ -701,12 +701,10 @@ fn signed_accum_to_coefficients<F: Field + CanonicalEncoding, const D: usize>(
 
 pub fn build_decompose_fold_witness<F: Field + CanonicalEncoding, const D: usize>(
     centered_coeffs: Vec<[i32; D]>,
-    modulus: u128,
+    _modulus: u128,
 ) -> DecomposeFoldWitness<F> {
-    let z_folded_coeffs = cfg_iter!(centered_coeffs)
-        .map(|coeff_accum| signed_accum_to_coefficients::<F, D>(*coeff_accum, modulus))
-        .collect();
-    DecomposeFoldWitness::from_coefficient_parts(z_folded_coeffs, centered_coeffs)
+    DecomposeFoldWitness::from_centered_coeffs_flat::<D>(centered_coeffs.into_flattened())
+        .expect("typed decompose fold rows have valid ring geometry")
 }
 
 /// Fused base-field fold + evaluation shared by backends that do not specialize it.

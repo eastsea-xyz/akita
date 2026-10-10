@@ -621,40 +621,36 @@ impl MetalBackend {
         };
         let timings = outcome.timings;
         let allocation_bytes = outcome.allocation_bytes;
-        let mut compressed = Vec::with_capacity(plan.num_positions_per_block);
-        let mut chunks = outcome.centered_coefficients.chunks_exact(D);
-        for coefficients in chunks.by_ref() {
-            let coefficients: &[i32; D] = coefficients.try_into().map_err(|_| {
-                AkitaError::InvalidSetup("packed opening produced a short coefficient row".into())
-            })?;
-            compressed.push(*coefficients);
-        }
-        if !chunks.remainder().is_empty() {
+        let mut centered = outcome.centered_coefficients;
+        let expected_coefficients = plan.num_positions_per_block.checked_mul(D).ok_or_else(|| {
+            MetalCommitError::ShapeOverflow("packed opening output coefficients").into_akita()
+        })?;
+        if centered.len() != expected_coefficients {
             return Err(AkitaError::InvalidSize {
-                expected: D,
-                actual: chunks.remainder().len(),
+                expected: expected_coefficients,
+                actual: centered.len(),
             });
         }
-        let centered = if plan.num_digits == 1 {
-            compressed
-        } else {
-            let expanded_len = compressed
+        if plan.num_digits > 1 {
+            let expanded_len = centered
                 .len()
                 .checked_mul(plan.num_digits)
                 .ok_or_else(|| {
                     MetalCommitError::ShapeOverflow("packed opening digit expansion").into_akita()
                 })?;
-            let mut expanded = Vec::with_capacity(expanded_len);
-            for coefficients in compressed {
-                expanded.push(coefficients);
-                expanded.extend((1..plan.num_digits).map(|_| [0i32; D]));
+            centered.resize(expanded_len, 0);
+            let coefficients_per_position = D.checked_mul(plan.num_digits).ok_or_else(|| {
+                MetalCommitError::ShapeOverflow("packed opening digit expansion").into_akita()
+            })?;
+            for position in (0..plan.num_positions_per_block).rev() {
+                let source_start = position * D;
+                let destination_start = position * coefficients_per_position;
+                centered.copy_within(source_start..source_start + D, destination_start);
+                centered[destination_start + D..destination_start + coefficients_per_position]
+                    .fill(0);
             }
-            expanded
-        };
-        let modulus = (-F::one()).to_canonical_u128() + 1;
-        let witness = akita_prover::backend::poly_helpers::build_decompose_fold_witness::<F, D>(
-            centered, modulus,
-        );
+        }
+        let witness = DecomposeFoldWitness::from_centered_coeffs_flat::<D>(centered)?;
         self.update_opening_metrics(|metrics| {
             metrics.command_wall_time += timings.command_wall;
             metrics.gpu_active_time += timings.gpu.unwrap_or_default();

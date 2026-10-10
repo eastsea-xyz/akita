@@ -231,8 +231,12 @@ pub(super) fn aggregate_decompose_fold_witnesses<F: Field, const D: usize>(
     };
     first.ensure_ring_dim::<D>()?;
     let row_count = first.row_count();
-    let (z_folded_rings, mut centered_coeffs) = first.into_owned_flat_parts();
-    let mut z_folded_coeffs = z_folded_rings.into_coeffs();
+    let DecomposeFoldWitness {
+        z_folded_rings,
+        centered_coeffs_flat: mut centered_coeffs,
+        ..
+    } = first;
+    let mut z_folded_coeffs = z_folded_rings.into_inner().map(|rings| rings.into_coeffs());
 
     for witness in witnesses {
         witness.ensure_ring_dim::<D>()?;
@@ -241,11 +245,20 @@ pub(super) fn aggregate_decompose_fold_witnesses<F: Field, const D: usize>(
                 "batched decompose_fold witness length mismatch".to_string(),
             ));
         }
-        for (dst, src) in z_folded_coeffs
-            .iter_mut()
-            .zip(witness.z_folded_rings.coeffs())
-        {
-            *dst += *src;
+        let explicit_fields = witness.z_folded_rings.get();
+        if z_folded_coeffs.is_some() || explicit_fields.is_some() {
+            let field_sum = z_folded_coeffs.get_or_insert_with(|| {
+                centered_coeffs
+                    .iter()
+                    .map(|&value| F::from_i64(i64::from(value)))
+                    .collect()
+            });
+            for (index, dst) in field_sum.iter_mut().enumerate() {
+                *dst += explicit_fields.map_or_else(
+                    || F::from_i64(i64::from(witness.centered_coeffs_flat()[index])),
+                    |rings| rings.coeffs()[index],
+                );
+            }
         }
         for (dst, src) in centered_coeffs
             .iter_mut()
@@ -259,10 +272,13 @@ pub(super) fn aggregate_decompose_fold_witnesses<F: Field, const D: usize>(
         }
     }
 
-    DecomposeFoldWitness::from_owned_flat_parts::<D>(
-        akita_types::RingVec::from_coeffs_with_ring_dim(z_folded_coeffs, D)?,
-        centered_coeffs,
-    )
+    let mut witness = DecomposeFoldWitness::from_centered_coeffs_flat::<D>(centered_coeffs)?;
+    if let Some(coefficients) = z_folded_coeffs {
+        witness.z_folded_rings = std::sync::OnceLock::from(
+            akita_types::RingVec::from_coeffs_with_ring_dim(coefficients, D)?,
+        );
+    }
+    Ok(witness)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -947,3 +963,71 @@ impl RingRelationProver {
 #[cfg(test)]
 #[path = "ring_relation_tests.rs"]
 mod prepared_group_tests;
+
+#[cfg(test)]
+mod decompose_fold_aggregation_tests {
+    use super::*;
+    use jolt_field::{Prime128Offset275, Ring};
+
+    type F = Prime128Offset275;
+
+    #[test]
+    fn centered_aggregation_preserves_fields_extrema_and_zero_planes() {
+        let first = DecomposeFoldWitness::<F>::from_centered_coeffs_flat::<4>(vec![
+            -8, 7, 2, -1, 0, 0, 0, 0,
+        ])
+        .unwrap();
+        let second = DecomposeFoldWitness::<F>::from_centered_coeffs_flat::<4>(vec![
+            3, -2, 4, 1, 0, 0, 0, 0,
+        ])
+        .unwrap();
+        let result = aggregate_decompose_fold_witnesses::<F, 4>(vec![first, second]).unwrap();
+        assert_eq!(result.centered_coeffs_flat(), &[-5, 5, 6, 0, 0, 0, 0, 0]);
+        assert_eq!(result.centered_signed_extrema(), (-5, 6));
+        assert_eq!(result.centered_inf_norm(), 6);
+        assert!(result.z_folded_rings.get().is_none());
+        assert_eq!(
+            result.z_folded_rings_trusted::<4>().unwrap()[0].coefficients(),
+            &[-5, 5, 6, 0].map(F::from_i64)
+        );
+    }
+
+    #[test]
+    fn aggregation_preserves_explicit_fields_even_when_centered_rows_differ() {
+        let explicit =
+            DecomposeFoldWitness::from_coefficient_parts(vec![[F::from_i64(9); 4]], vec![[2; 4]]);
+        let centered =
+            DecomposeFoldWitness::<F>::from_centered_coeffs_flat::<4>(vec![3; 4]).unwrap();
+        let additional =
+            DecomposeFoldWitness::<F>::from_centered_coeffs_flat::<4>(vec![4; 4]).unwrap();
+        for inputs in [
+            vec![explicit.clone(), centered.clone(), additional.clone()],
+            vec![centered.clone(), explicit.clone(), additional.clone()],
+            vec![centered, additional, explicit],
+        ] {
+            let result = aggregate_decompose_fold_witnesses::<F, 4>(inputs).unwrap();
+            assert_eq!(result.centered_coeffs_flat(), &[9; 4]);
+            assert_eq!(
+                result.z_folded_rings_trusted::<4>().unwrap()[0].coefficients(),
+                &[F::from_i64(16); 4]
+            );
+        }
+    }
+
+    #[test]
+    fn centered_aggregation_rejects_overflow_and_mismatched_geometry() {
+        for (left, right) in [(i32::MAX, 1), (i32::MIN, -1)] {
+            let inputs = [left, right].map(|value| {
+                DecomposeFoldWitness::<F>::from_centered_coeffs_flat::<4>(vec![value; 4]).unwrap()
+            });
+            let error = aggregate_decompose_fold_witnesses::<F, 4>(Vec::from(inputs)).unwrap_err();
+            assert!(
+                matches!(error, AkitaError::InvalidInput(message) if message.contains("overflow"))
+            );
+        }
+        let first = DecomposeFoldWitness::<F>::from_centered_coeffs_flat::<4>(vec![0; 4]).unwrap();
+        let second = DecomposeFoldWitness::<F>::from_centered_coeffs_flat::<4>(vec![0; 8]).unwrap();
+        assert!(aggregate_decompose_fold_witnesses::<F, 4>(vec![first, second]).is_err());
+        assert!(aggregate_decompose_fold_witnesses::<F, 4>(vec![]).is_err());
+    }
+}
