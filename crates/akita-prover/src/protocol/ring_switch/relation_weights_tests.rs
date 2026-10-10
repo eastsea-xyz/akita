@@ -1,4 +1,6 @@
+use super::setup_columns::contract_setup_columns;
 use super::*;
+use akita_algebra::ring::eval_flat_ring_at_pows_fast;
 use akita_types::CommitmentRingDims;
 use jolt_field::{One, Prime128OffsetA7F7, Zero};
 
@@ -481,7 +483,23 @@ where
             opening_points: OpeningFamily::EvaluationTrace(()),
         };
         let (oracle, oracle_semantics) = build_relation_weight_events(inputs()).unwrap();
-        let (direct, direct_semantics) = compile_relation_weight_factorization(inputs()).unwrap();
+        let (direct, direct_semantics) =
+            compile_relation_weight_factorization(inputs(), None).unwrap();
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let fallback =
+            |source: &AkitaExpandedSetup<B>,
+             projections: &[crate::compute::SetupColumnContractionPlan<'_, E>]| {
+                assert!(std::ptr::eq(source, &setup));
+                assert_eq!(projections.len(), 3);
+                calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(None)
+            };
+        let (fallback_direct, fallback_semantics) =
+            compile_relation_weight_factorization(inputs(), Some(&fallback)).unwrap();
+        assert!(calls.load(std::sync::atomic::Ordering::Relaxed) > 0);
+        assert_eq!(fallback_direct, direct);
+        assert_eq!(fallback_semantics, direct_semantics);
+
         assert_eq!(direct, oracle.factor_common_alpha().unwrap());
         assert_eq!(
             direct.materialize_dense().unwrap(),

@@ -6,11 +6,15 @@ mod compiler;
 mod reduced_dense;
 #[path = "relation_weights/setup_columns.rs"]
 mod setup_columns;
+#[path = "relation_weights/setup_projection.rs"]
+mod setup_projection;
+pub(crate) use setup_projection::SetupColumnProjection;
+use setup_projection::{contract_scalar_setup_batch, ScalarSetupRequest};
 
 use std::ops::Range;
 
 use akita_algebra::eq_poly::SplitEqEvals;
-use akita_algebra::ring::{eval_flat_ring_at_pows_fast, scalar_powers};
+use akita_algebra::ring::scalar_powers;
 use akita_error::AkitaError;
 use akita_types::{
     gadget_row_scalars, prepare_coefficient_packing_batch_semantics, r_decomp_levels,
@@ -25,9 +29,7 @@ use compiler::{
     ZWeightSink,
 };
 use jolt_field::{CanonicalEncoding, ExtField, Field, MulBaseUnreduced, Ring};
-use setup_columns::{
-    contract_setup_columns, contract_setup_residue_columns, SetupColumnValues, SetupRows,
-};
+use setup_columns::{contract_setup_residue_columns, SetupColumnValues, SetupRows};
 
 /// Source of setup-matrix relation weights for this evaluation.
 #[derive(Clone, Copy)]
@@ -289,6 +291,7 @@ where
                 setup_is_deferred,
             })
         },
+        None,
     )
 }
 
@@ -297,18 +300,21 @@ where
 #[tracing::instrument(skip_all, name = "compile_relation_weight_factorization")]
 pub(crate) fn compile_relation_weight_factorization<F, E>(
     inputs: RelationWeightEventInputs<'_, F, E>,
+    projection: Option<&SetupColumnProjection<'_, F, E>>,
 ) -> Result<RelationWeightBuild<E, RelationWeightFactorization<E>>, AkitaError>
 where
     F: Field + CanonicalEncoding + akita_serialization::AkitaSerialize,
     E: FpExtEncoding<F> + Ring + ExtField<F> + MulBaseUnreduced<F>,
 {
-    let (target, opening_semantics) = build_relation_weights(inputs, FactoredWeightSink::new)?;
+    let (target, opening_semantics) =
+        build_relation_weights(inputs, FactoredWeightSink::new, projection)?;
     Ok((target.finish()?, opening_semantics))
 }
 
 fn build_relation_weights<F, E, S>(
     inputs: RelationWeightEventInputs<'_, F, E>,
     target: impl FnOnce(Vec<E>, usize, usize, bool) -> Result<S, AkitaError>,
+    projection: Option<&SetupColumnProjection<'_, F, E>>,
 ) -> Result<(S, OpeningFamily<(), CoefficientPackingBatchSemantics<E>>), AkitaError>
 where
     F: Field + CanonicalEncoding + akita_serialization::AkitaSerialize,
@@ -482,42 +488,50 @@ where
         let challenge_evaluations = (0..total_blocks)
             .map(|index| challenges.eval_at_pows::<F, E>(index, &group_alpha_pows_a))
             .collect::<Result<Vec<_>, _>>()?;
-        let d_setup_accs = if let Some(setup) = compilation.setup_sources.as_ref() {
-            let _span = tracing::info_span!("relation_weight_d_setup_columns").entered();
-            Some(contract_setup_columns(
-                &setup.d,
-                group_plan.rows.d_setup_range.clone(),
-                &compilation.plan.d_row_weights,
-                1,
-                1,
-                |coefficients| {
-                    Ok([eval_flat_ring_at_pows_fast(
-                        coefficients,
-                        &group_alpha_pows_d,
-                    )])
-                },
-            )?)
-        } else {
-            None
-        };
-        let b_setup_accs = if let Some(group_setup) = group_setup {
-            let _span = tracing::info_span!("relation_weight_b_setup_columns").entered();
-            Some(contract_setup_columns(
-                &group_setup.b,
-                0..group_plan.witness.b_width,
-                &group_plan.rows.b_setup_row_weights,
-                group_plan.witness.slice_count,
-                1,
-                |coefficients| {
-                    Ok([eval_flat_ring_at_pows_fast(
-                        coefficients,
-                        &group_alpha_pows_b,
-                    )])
-                },
-            )?)
-        } else {
-            None
-        };
+        let (d_setup_accs, b_setup_accs, a_setup) =
+            match (compilation.setup_sources.as_ref(), group_setup) {
+                (Some(setup_sources), Some(group_setup)) => {
+                    let _span =
+                        tracing::info_span!("relation_weight_setup_columns_batch").entered();
+                    let requests = [
+                        ScalarSetupRequest {
+                            family: &setup_sources.d,
+                            columns: group_plan.rows.d_setup_range.clone(),
+                            row_weights: &compilation.plan.d_row_weights,
+                            batch_count: 1,
+                            alpha_powers: &group_alpha_pows_d,
+                        },
+                        ScalarSetupRequest {
+                            family: &group_setup.b,
+                            columns: 0..group_plan.witness.b_width,
+                            row_weights: &group_plan.rows.b_setup_row_weights,
+                            batch_count: group_plan.witness.slice_count,
+                            alpha_powers: &group_alpha_pows_b,
+                        },
+                        ScalarSetupRequest {
+                            family: &group_setup.a,
+                            columns: 0..group_plan.witness.inner_width,
+                            row_weights: &group_plan.rows.a_setup_row_weights,
+                            batch_count: 1,
+                            alpha_powers: &group_alpha_pows_a,
+                        },
+                    ];
+                    let matrix = setup_matrix.ok_or(AkitaError::InvalidProof)?;
+                    let mut values =
+                        contract_scalar_setup_batch(matrix, &requests, projection)?.into_iter();
+                    (
+                        Some(values.next().ok_or(AkitaError::InvalidProof)?),
+                        Some(values.next().ok_or(AkitaError::InvalidProof)?),
+                        Some(values.next().ok_or(AkitaError::InvalidProof)?),
+                    )
+                }
+                (None, None) => (None, None, None),
+                _ => {
+                    return Err(AkitaError::InvalidSetup(
+                        "lifted setup projection phases disagree".into(),
+                    ))
+                }
+            };
 
         {
             let setup = match (d_setup_accs.as_ref(), b_setup_accs.as_ref()) {
@@ -560,23 +574,6 @@ where
         } else {
             vec![E::zero(); group_plan.witness.num_positions]
         };
-        let a_setup = group_setup
-            .map(|group_setup| {
-                contract_setup_columns(
-                    &group_setup.a,
-                    0..group_plan.witness.inner_width,
-                    &group_plan.rows.a_setup_row_weights,
-                    1,
-                    1,
-                    |coefficients| {
-                        Ok([eval_flat_ring_at_pows_fast(
-                            coefficients,
-                            &group_alpha_pows_a,
-                        )])
-                    },
-                )
-            })
-            .transpose()?;
         let setup = match a_setup.as_ref() {
             Some(values) => LiftedZSetup::Matrix(values),
             None => LiftedZSetup::Deferred,

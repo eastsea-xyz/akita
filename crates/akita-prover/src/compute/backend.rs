@@ -46,6 +46,18 @@ where
         expanded: Arc<AkitaExpandedSetup<F>>,
     ) -> Result<Self::PreparedSetup, AkitaError>;
 
+    /// Optional batched scalar setup-column projection.
+    ///
+    /// `None` selects the canonical CPU contraction before any source work.
+    /// Outputs retain request order and `[column offset][batch]` value order.
+    fn contract_setup_columns<E: akita_types::FpExtEncoding<F>>(
+        &self,
+        _prepared: &Self::PreparedSetup,
+        _plans: &[super::SetupColumnContractionPlan<'_, E>],
+    ) -> Result<Option<Vec<Vec<E>>>, AkitaError> {
+        Ok(None)
+    }
+
     /// Build the cache for `key` if absent.
     fn ensure_ntt_slot(
         &self,

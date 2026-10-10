@@ -28,6 +28,7 @@ pub(crate) fn ring_switch_finalize<F, E, T>(
     gamma: Option<&[E]>,
     opening_claim_coefficients: &[E],
     prepared_relation_groups: &[crate::protocol::ring_relation::PreparedRelationGroup<F, E>],
+    setup_projection: Option<&relation_weights::SetupColumnProjection<'_, F, E>>,
 ) -> Result<RingSwitchFinalization<E>, AkitaError>
 where
     F: Field + CanonicalEncoding + akita_serialization::AkitaSerialize,
@@ -176,8 +177,8 @@ where
         let _span = tracing::info_span!("relation_weight_compilation").entered();
         match lp.ring_relation_mode {
             akita_types::RingRelationMode::QuotientLift => {
-                let (ordinary, opening_semantics) =
-                    compile_relation_weight_factorization(RelationWeightEventInputs {
+                let (ordinary, opening_semantics) = compile_relation_weight_factorization(
+                    RelationWeightEventInputs {
                         setup: RelationSetupSource::Matrix(setup),
                         instance,
                         alpha,
@@ -188,7 +189,9 @@ where
                         opening_ring_dim,
                         relation_plan: &relation_plan,
                         opening_points,
-                    })?;
+                    },
+                    setup_projection,
+                )?;
                 let compression = if lp.payload_mode.is_compressed() {
                     super::RingSwitchCompression::QuotientLift {
                         weights: akita_types::build_compression_relation_weights(

@@ -634,18 +634,21 @@ fn direct_factored_compiler_matches_complete_degree_two_packing_reference() {
         };
         let (oracle, oracle_semantics) =
             build_relation_weight_events(inputs(RelationSetupSource::Matrix(&setup))).unwrap();
-        let (direct, direct_semantics) =
-            compile_relation_weight_factorization(inputs(RelationSetupSource::Matrix(&setup)))
-                .unwrap();
+        let (direct, direct_semantics) = compile_relation_weight_factorization(
+            inputs(RelationSetupSource::Matrix(&setup)),
+            None,
+        )
+        .unwrap();
         assert_eq!(direct, oracle.factor_common_alpha().unwrap());
         assert_eq!(
             direct.materialize_dense().unwrap(),
             oracle.materialize_dense().unwrap()
         );
         assert_eq!(direct_semantics, oracle_semantics);
-        assert!(
-            compile_relation_weight_factorization(inputs(RelationSetupSource::DeferredClaim))
-                .is_err()
-        );
+        assert!(compile_relation_weight_factorization(
+            inputs(RelationSetupSource::DeferredClaim),
+            None
+        )
+        .is_err());
     }
 }

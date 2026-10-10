@@ -109,3 +109,9 @@ mod recursive_fold_admission_tests;
 
 #[cfg(all(test, target_os = "macos"))]
 mod packed_commit_admission_tests;
+
+#[cfg(all(test, target_os = "macos"))]
+mod setup_contraction_admission_tests;
+
+#[cfg(target_os = "macos")]
+mod setup_contractions;

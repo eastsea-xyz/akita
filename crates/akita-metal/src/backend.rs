@@ -1179,6 +1179,14 @@ impl DirectRelationRangeProofBackend<F, F> for MetalBackend {
 impl ComputeBackendSetup<F> for MetalBackend {
     type PreparedSetup = MetalPreparedSetup;
 
+    fn contract_setup_columns<E: akita_types::FpExtEncoding<F>>(
+        &self,
+        prepared: &Self::PreparedSetup,
+        plans: &[akita_prover::compute::SetupColumnContractionPlan<'_, E>],
+    ) -> Result<Option<Vec<Vec<E>>>, AkitaError> {
+        self.scalar_setup_contractions(prepared, plans)
+    }
+
     fn prepare_expanded(
         &self,
         expanded: Arc<AkitaExpandedSetup<F>>,

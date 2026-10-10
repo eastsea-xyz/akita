@@ -492,6 +492,22 @@ where
         }
     }
     let next_opening_source_len = committed_witness_len / next_opening_ring_dim;
+    let setup_context = stack.opening();
+    let setup_projection =
+        |source: &AkitaExpandedSetup<F>,
+         plans: &[crate::compute::SetupColumnContractionPlan<'_, E>]| {
+            if !std::ptr::eq(
+                setup_context
+                    .backend()
+                    .prepared_expanded_setup(setup_context.prepared()),
+                source,
+            ) {
+                return Ok(None);
+            }
+            setup_context
+                .backend()
+                .contract_setup_columns(setup_context.prepared(), plans)
+        };
     let ring_switch = ring_switch_finalize::<F, E, T>(
         &prepared_fold.instance,
         expanded.as_ref(),
@@ -505,6 +521,7 @@ where
         prepared_fold.row_coefficients.as_deref(),
         &prepared_fold.evaluation_trace_claim_coefficients,
         &prepared_fold.relation_groups,
+        Some(&setup_projection),
     )
     .map_err(|err| AkitaError::InvalidInput(format!("ring-switch finalize failed: {err:?}")))?;
     let mut rs = ring_switch.output;

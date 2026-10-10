@@ -32,6 +32,7 @@ mod plans;
 mod poly;
 mod requirements;
 mod runtime_capabilities;
+mod setup_columns;
 mod sparse_high_half;
 mod stack;
 
@@ -75,3 +76,5 @@ pub use stack::{
     PlannedNttCacheOwnerMetric, ProverComputeStack, ReleaseRootNttAfterFold, TieredProveStacks,
     UniformProverStack, NTT_PREWARM_STACK_BYTES,
 };
+
+pub use setup_columns::SetupColumnContractionPlan;
