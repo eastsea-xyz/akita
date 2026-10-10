@@ -11,6 +11,7 @@ kernel void akita_fp128_recursive_commit_d512_matvec(
     device const int *psi_pows [[buffer(6)]],
     device const int *inverse_scale [[buffer(7)]],
     constant RecursiveCommitParams &params [[buffer(8)]],
+    constant PackedRecursiveCommitParams &packed [[buffer(9)]],
     uint thread_index [[thread_index_in_threadgroup]],
     uint3 threadgroup_index [[threadgroup_position_in_grid]])
 {
@@ -32,7 +33,7 @@ kernel void akita_fp128_recursive_commit_d512_matvec(
             ulong source_index = (block * params.num_cols + column) * params.ring_d
                 + (ulong)thread_index;
             values[thread_index] = d512_ntt_mul(
-                d512_i32_to_mont((int)digits[source_index], prime),
+                d512_i32_to_mont(akita_packed_recursive_commit_digit(digits, params, packed, source_index), prime),
                 psi_pows[table_base + (ulong)thread_index], prime);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);

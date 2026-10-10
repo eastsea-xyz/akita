@@ -187,40 +187,64 @@ impl MetalRuntime {
         match source {
             RecursiveFoldSource::Field { buffer } => Ok((buffer.clone(), 0)),
             RecursiveFoldSource::Packed { owner } => {
-                let mut cache = self
-                    .recursive_packed_cache
-                    .lock()
-                    .map_err(|_| MetalCommitError::PoisonedLock)?;
-                if let Some(entry) = cache.iter().find(|entry| {
-                    Arc::ptr_eq(&entry.owner, owner)
-                        && entry.bit_width == p.bit_width
-                        && entry.stored_coefficients == p.stored_coefficients
-                }) {
-                    return Ok((entry.buffer.clone().into(), 0));
-                }
-                let payload_len =
-                    usize::try_from((p.stored_coefficients * p.bit_width).div_ceil(8))
-                        .map_err(|_| MetalCommitError::ShapeOverflow("recursive packed payload"))?;
-                let buffer = self.shared_buffer_from_slice(&owner[..payload_len])?;
-                // Bounded immutable ownership: no stale pointer hits and no byte rescans.
-                const MAX_CACHE_BYTES: usize = 64 * 1024 * 1024;
-                if payload_len <= MAX_CACHE_BYTES {
-                    while cache.len() >= 8
-                        || cache.iter().map(|e| e.buffer.length()).sum::<u64>() + payload_len as u64
-                            > MAX_CACHE_BYTES as u64
-                    {
-                        cache.remove(0);
-                    }
-                    cache.push(RecursivePackedCacheEntry {
-                        owner: owner.clone(),
-                        bit_width: p.bit_width,
-                        stored_coefficients: p.stored_coefficients,
-                        buffer: buffer.clone(),
-                    });
-                }
-                Ok((buffer.into(), payload_len))
+                self.packed_immutable_input_buffer(owner, p.bit_width, p.stored_coefficients)
             }
         }
+    }
+
+    pub(super) fn packed_immutable_input_buffer(
+        &self,
+        owner: &Arc<[u8]>,
+        bit_width: u64,
+        stored_coefficients: u64,
+    ) -> Result<(crate::prepared::MatrixBuffer, usize), MetalCommitError> {
+        if !(1..=8).contains(&bit_width) || stored_coefficients == 0 {
+            return Err(MetalCommitError::UnsupportedShape(
+                "immutable packed input geometry".into(),
+            ));
+        }
+        let payload_len = stored_coefficients
+            .checked_mul(bit_width)
+            .map(|bits| bits.div_ceil(8))
+            .and_then(|bytes| usize::try_from(bytes).ok())
+            .ok_or(MetalCommitError::ShapeOverflow(
+                "immutable packed input payload",
+            ))?;
+        if owner.len() < payload_len {
+            return Err(MetalCommitError::UnsupportedShape(
+                "immutable packed input extent".into(),
+            ));
+        }
+        self.validate_buffer_length(payload_len)?;
+        let mut cache = self
+            .recursive_packed_cache
+            .lock()
+            .map_err(|_| MetalCommitError::PoisonedLock)?;
+        if let Some(entry) = cache.iter().find(|entry| {
+            Arc::ptr_eq(&entry.owner, owner)
+                && entry.bit_width == bit_width
+                && entry.stored_coefficients == stored_coefficients
+        }) {
+            return Ok((entry.buffer.clone().into(), 0));
+        }
+        let buffer = self.shared_buffer_from_slice(&owner[..payload_len])?;
+        // Bounded immutable ownership: no stale pointer hits and no byte rescans.
+        const MAX_CACHE_BYTES: usize = 64 * 1024 * 1024;
+        if payload_len <= MAX_CACHE_BYTES {
+            while cache.len() >= 8
+                || cache.iter().map(|e| e.buffer.length()).sum::<u64>() + payload_len as u64
+                    > MAX_CACHE_BYTES as u64
+            {
+                cache.remove(0);
+            }
+            cache.push(RecursivePackedCacheEntry {
+                owner: owner.clone(),
+                bit_width,
+                stored_coefficients,
+                buffer: buffer.clone(),
+            });
+        }
+        Ok((buffer.into(), payload_len))
     }
 }
 

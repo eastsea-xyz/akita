@@ -27,6 +27,8 @@ mod commit;
 pub(crate) mod digit_tree;
 mod direct_range;
 mod fold;
+mod packed_recursive_commit;
+pub(crate) use packed_recursive_commit::{PackedRecursiveCommitParams, RecursiveCommitInput};
 #[path = "packed_onehot/k16.rs"]
 mod k16;
 mod recursive_fold;
@@ -147,7 +149,9 @@ const KERNEL_SOURCE: &str = concat!(
     "\n",
     include_str!("kernels/witness_pack.metal"),
     "\n",
-    include_str!("kernels/recursive_fold.metal")
+    include_str!("kernels/recursive_fold.metal"),
+    "\n",
+    include_str!("kernels/packed_recursive_commit.metal")
 );
 /// Largest D512 panel threadgroup; each GPU gets what its compiled pipeline
 /// allows (register pressure: 640 on M1 Max), rounded down to whole simdgroups.

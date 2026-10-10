@@ -407,7 +407,7 @@ impl MetalRuntime {
     pub(crate) fn dispatch_fp128_recursive_commit<const D: usize>(
         &self,
         matrix_ntt: &Buffer,
-        digits: &[i8],
+        input: RecursiveCommitInput<'_>,
         params: RecursiveCommitParams,
     ) -> Result<RecursiveCommitDispatchOutcome, MetalCommitError> {
         autoreleasepool(|| {
@@ -423,12 +423,6 @@ impl MetalRuntime {
                     .ok_or(MetalCommitError::ShapeOverflow(
                         "recursive commit matrix rings",
                     ))?;
-            let expected_source_bytes = num_blocks
-                .checked_mul(num_cols)
-                .and_then(|count| count.checked_mul(D))
-                .ok_or(MetalCommitError::ShapeOverflow(
-                    "recursive commit source bytes",
-                ))?;
             let expected_output = num_blocks
                 .checked_mul(num_rows)
                 .and_then(|count| count.checked_mul(D))
@@ -448,7 +442,6 @@ impl MetalRuntime {
                 || params.num_primes != FP128_D512_LINEAR_RELATION_NUM_PRIMES as u64
                 || params.matrix_rings != expected_matrix_rings as u64
                 || params.output_coefficients != expected_output as u64
-                || digits.len() < expected_source_bytes
                 || matrix_ntt.length() < expected_matrix_ntt_bytes as u64
                 || !self.supports_fp128_recursive_commit::<D>(
                     num_blocks,
@@ -461,6 +454,7 @@ impl MetalRuntime {
                     "fp128 recursive commitment exceeds the exact CRT or device limits".into(),
                 ));
             }
+            self.validate_recursive_commit_input::<D>(&input, params)?;
             let resources = self.recursive_commit_resources(D).ok_or_else(|| {
                 MetalCommitError::UnsupportedShape(format!(
                     "no recursive commitment resources for D={D}"
@@ -468,7 +462,8 @@ impl MetalRuntime {
             })?;
 
             let buffer_start = Instant::now();
-            let digit_buffer = self.shared_slice_buffer(digits)?;
+            let packed_params = input.packed_params();
+            let (digit_buffer, input_bytes) = self.recursive_commit_input_buffer(&input)?;
             let residue_count = expected_output
                 .checked_mul(FP128_D512_LINEAR_RELATION_NUM_PRIMES)
                 .ok_or(MetalCommitError::ShapeOverflow("recursive commit residues"))?;
@@ -491,7 +486,7 @@ impl MetalRuntime {
             } else {
                 &self.fp128_recursive_commit_matvec_pipeline
             });
-            encoder.set_buffer(0, Some(&digit_buffer.buffer), 0);
+            encoder.set_buffer(0, Some(&digit_buffer), 0);
             encoder.set_buffer(1, Some(matrix_ntt), 0);
             encoder.set_buffer(2, Some(&residues), 0);
             encoder.set_buffer(3, Some(&resources.primes), 0);
@@ -500,6 +495,7 @@ impl MetalRuntime {
             encoder.set_buffer(6, Some(&resources.psi_pows), 0);
             encoder.set_buffer(7, Some(&resources.inverse_scale), 0);
             set_inline_bytes(encoder, 8, &params);
+            set_inline_bytes(encoder, 9, &packed_params);
             encoder.dispatch_thread_groups(
                 MTLSize::new(params.num_block_groups * params.num_primes, 1, 1),
                 MTLSize::new(FP128_RECURSIVE_COMMIT_THREADS as u64, 1, 1),
@@ -538,13 +534,7 @@ impl MetalRuntime {
             let readback_copy = readback_start.elapsed();
             let allocation_bytes = residue_bytes
                 .checked_add(output_bytes)
-                .and_then(|bytes| {
-                    bytes.checked_add(if digit_buffer.zero_copy {
-                        0
-                    } else {
-                        size_of_val(digits)
-                    })
-                })
+                .and_then(|bytes| bytes.checked_add(input_bytes))
                 .ok_or(MetalCommitError::ShapeOverflow(
                     "recursive commit allocation bytes",
                 ))?;

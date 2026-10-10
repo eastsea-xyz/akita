@@ -1,14 +1,16 @@
-use akita_algebra::balanced_decompose_coefficients_pow2_i8_into;
-use akita_algebra::ring::cyclotomic::BalancedDecomposePow2Params;
+use akita_algebra::ring::cyclotomic::decompose_centering_threshold;
 use akita_error::{checked, AkitaError};
 use akita_prover::backend::DenseView;
 use akita_prover::compute::{CommitInnerPlan, RootCommitKernel};
 use akita_prover::{CommitInnerWitness, SuffixWitnessView};
 use akita_types::{balanced_signed_digit_abs_bound, RingVec, MAX_I8_LOG_BASIS};
-use jolt_field::{One, Ring, Zero};
+use jolt_field::One;
 
 use crate::field::F;
-use crate::runtime::{MetalRuntime, RecursiveCommitParams, FP128_D512_LINEAR_RELATION_NUM_PRIMES};
+use crate::runtime::{
+    MetalRuntime, PackedRecursiveCommitParams, RecursiveCommitInput, RecursiveCommitParams,
+    FP128_D512_LINEAR_RELATION_NUM_PRIMES,
+};
 use crate::{MetalBackend, MetalCommitError, MetalExecutionPolicy};
 
 // Dense advice commitments deliberately retain the CPU implementation at any
@@ -66,8 +68,10 @@ impl<const D: usize> RootCommitKernel<SuffixWitnessView<'_, F, D>, F, D> for Met
         {
             return match self.policy() {
                 MetalExecutionPolicy::PreferMetal => {
-                    self.cpu_backend()
-                        .commit_inner_group(&prepared.cpu, sources, plan)
+                    let source_count = sources.len();
+                    let output = self.cpu_backend().commit_inner_group(&prepared.cpu, sources, plan)?;
+                    self.record_opening_cpu_fallback(source_count).map_err(MetalCommitError::into_akita)?;
+                    Ok(output)
                 }
                 MetalExecutionPolicy::RequireMetal => {
                     Err(MetalCommitError::UnsupportedShape(format!(
@@ -94,10 +98,11 @@ impl<const D: usize> RootCommitKernel<SuffixWitnessView<'_, F, D>, F, D> for Met
         };
         let blocks_per_group = MetalRuntime::recursive_commit_blocks_per_group::<D>();
         let mut parameters = Vec::with_capacity(sources.len());
+        let mut inputs = Vec::with_capacity(sources.len());
         let mut supported = true;
         for source in &sources {
             let blocks = source.num_live_blocks(plan.num_positions_per_block)?;
-            let physical = source.digits().len();
+            let (owner, width, stored, physical, _) = source.packed_fold_storage()?;
             let minimum_rings =
                 checked::mul_add(blocks.saturating_sub(1), plan.num_positions_per_block, 1)
                     .ok_or_else(|| {
@@ -112,7 +117,7 @@ impl<const D: usize> RootCommitKernel<SuffixWitnessView<'_, F, D>, F, D> for Met
                 runtime.supports_fp128_recursive_commit::<D>(blocks, plan.n_a, cols, rhs_abs_bound);
             let output = checked::product([blocks, plan.n_a, D])
                 .ok_or_else(|| MetalCommitError::ShapeOverflow("recursive output").into_akita())?;
-            parameters.push(RecursiveCommitParams {
+            let params = RecursiveCommitParams {
                 num_blocks: blocks as u64,
                 blocks_per_group: blocks_per_group as u64,
                 num_block_groups: blocks.div_ceil(blocks_per_group) as u64,
@@ -123,13 +128,47 @@ impl<const D: usize> RootCommitKernel<SuffixWitnessView<'_, F, D>, F, D> for Met
                 matrix_rings: matrix_rings as u64,
                 output_coefficients: output as u64,
                 rhs_abs_bound,
-            });
+            };
+            let capacity =
+                checked::product([blocks, plan.num_positions_per_block, D]).ok_or_else(|| {
+                    MetalCommitError::ShapeOverflow("recursive raw source capacity").into_akita()
+                })?;
+            let input = RecursiveCommitInput::Packed {
+                owner,
+                params: PackedRecursiveCommitParams {
+                    stored_coefficients: stored.min(capacity) as u64,
+                    physical_coefficients: physical.min(capacity) as u64,
+                    ring_d: D as u64,
+                    bit_width: u64::from(width),
+                    num_digits: plan.num_digits_inner as u64,
+                    log_basis: u64::from(plan.log_basis_inner),
+                    threshold: crate::field::Fp128Limbs::from_u128(decompose_centering_threshold(
+                        plan.num_digits_inner,
+                        plan.log_basis_inner,
+                        (-F::one()).to_canonical_u128() + 1,
+                    )),
+                },
+            };
+            match runtime.validate_recursive_commit_input::<D>(&input, params) {
+                Ok(()) => {}
+                Err(
+                    MetalCommitError::UnsupportedShape(_) | MetalCommitError::BufferTooLong { .. },
+                ) => supported = false,
+                Err(error) => return Err(error.into_akita()),
+            }
+            inputs.push(input);
+            parameters.push(params);
         }
         if !supported {
             return match self.policy() {
                 MetalExecutionPolicy::PreferMetal => {
-                    self.cpu_backend()
-                        .commit_inner_group(&prepared.cpu, sources, plan)
+                    let source_count = sources.len();
+                    let output =
+                        self.cpu_backend()
+                            .commit_inner_group(&prepared.cpu, sources, plan)?;
+                    self.record_opening_cpu_fallback(source_count)
+                        .map_err(MetalCommitError::into_akita)?;
+                    Ok(output)
                 }
                 MetalExecutionPolicy::RequireMetal => Err(MetalCommitError::UnsupportedShape(
                     "recursive commitment exceeds exact CRT or device bounds".into(),
@@ -139,46 +178,23 @@ impl<const D: usize> RootCommitKernel<SuffixWitnessView<'_, F, D>, F, D> for Met
         }
         // Validate every source before preparing matrices or launching any GPU work.
         let matrix = prepared.recursive_matrix::<D>(runtime, parameters[0])?;
-        let decomposition = (plan.num_digits_inner > 1).then(|| {
-            BalancedDecomposePow2Params::new(
-                plan.num_digits_inner,
-                plan.log_basis_inner,
-                (-F::one()).to_canonical_u128() + 1,
-            )
-        });
-        sources
+        inputs
             .into_iter()
             .zip(parameters)
-            .map(|(source, params)| {
-                let input_len = checked::product([params.num_blocks as usize, cols, D])
-                    .ok_or_else(|| {
-                        MetalCommitError::ShapeOverflow("recursive input").into_akita()
-                    })?;
-                let mut digits = vec![0i8; input_len];
-                let mut input = source.digits();
-                if let Some(decomposition) = &decomposition {
-                    let rings = (input.len() / D).min(input_len / (plan.num_digits_inner * D));
-                    let decomposed_ring_len = plan.num_digits_inner * D;
-                    for output in digits.chunks_exact_mut(decomposed_ring_len).take(rings) {
-                        let mut coefficients = [F::zero(); D];
-                        for coefficient in &mut coefficients {
-                            *coefficient =
-                                F::from_i8(input.next().ok_or(AkitaError::InvalidProof)?);
-                        }
-                        balanced_decompose_coefficients_pow2_i8_into(
-                            &coefficients,
-                            output,
-                            decomposition,
-                        );
-                    }
-                } else {
-                    for (output, digit) in digits.iter_mut().zip(input) {
-                        *output = digit;
-                    }
-                }
+            .map(|(input, params)| {
                 let outcome = runtime
-                    .dispatch_fp128_recursive_commit::<D>(&matrix.buffer, &digits, params)
+                    .dispatch_fp128_recursive_commit::<D>(&matrix.buffer, input, params)
                     .map_err(MetalCommitError::into_akita)?;
+                self.update_opening_metrics(|metrics| {
+                    metrics.buffer_setup_time += outcome.timings.buffer_setup;
+                    metrics.command_wall_time += outcome.timings.command_wall;
+                    metrics.gpu_active_time += outcome.timings.gpu.unwrap_or_default();
+                    metrics.readback_time += outcome.timings.readback_copy;
+                    metrics.allocation_bytes = metrics
+                        .allocation_bytes
+                        .saturating_add(outcome.allocation_bytes);
+                })
+                .map_err(MetalCommitError::into_akita)?;
                 let coefficients = outcome
                     .coefficients
                     .into_iter()
@@ -401,3 +417,6 @@ mod tests {
         assert_eq!(metrics.allocation_bytes, 0);
     }
 }
+
+#[cfg(test)]
+mod packed_tests;

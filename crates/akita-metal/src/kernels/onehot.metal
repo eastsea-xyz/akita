@@ -195,6 +195,20 @@ struct RecursiveCommitParams {
     ulong rhs_abs_bound;
 };
 
+struct PackedRecursiveCommitParams {
+    ulong stored_coefficients;
+    ulong physical_coefficients;
+    ulong ring_d;
+    ulong bit_width;
+    ulong num_digits;
+    ulong log_basis;
+    AkitaFp128 threshold;
+};
+
+inline int akita_packed_recursive_commit_digit(
+    device const char* source, constant RecursiveCommitParams& matrix,
+    constant PackedRecursiveCommitParams& packed, ulong expanded_index);
+
 struct D512LinearNttPrime {
     int p;
     int pinv;
@@ -2329,6 +2343,7 @@ kernel void akita_fp128_recursive_commit_matvec(
     device const int *psi_pows [[buffer(6)]],
     device const int *inverse_scale [[buffer(7)]],
     constant RecursiveCommitParams &params [[buffer(8)]],
+    constant PackedRecursiveCommitParams &packed [[buffer(9)]],
     uint thread_index [[thread_index_in_threadgroup]],
     uint3 threadgroup_index [[threadgroup_position_in_grid]])
 {
@@ -2358,7 +2373,7 @@ kernel void akita_fp128_recursive_commit_matvec(
             if (live) {
                 ulong source_index = (block * params.num_cols + column)
                     * params.ring_d + (ulong)coefficient;
-                digit = (int)digits[source_index];
+                digit = akita_packed_recursive_commit_digit(digits, params, packed, source_index);
             }
             values[register_index] = d512_ntt_mul(
                 d512_i32_to_mont(digit, prime),
