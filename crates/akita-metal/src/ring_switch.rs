@@ -33,7 +33,20 @@ impl<const D: usize> RingSwitchRelationKernel<RingSwitchRelationView<'_, D>, F, 
                 runtime.supports_fp128_d64_digit_rows::<D>(1, plan.n_d, source.e_hat.len(), true)
             })
         {
-            return self.digit_relation_rows(prepared, source.e_hat, plan.n_d);
+            return self.digit_relation_rows(prepared, source.e_hat, plan.n_d, false);
+        }
+        if D == 64
+            && plan.n_d == 0
+            && plan.n_b != 0
+            && plan.n_a == 0
+            && plan.log_basis_outer == 3
+            && source.e_hat.is_empty()
+            && source.z_segment.is_empty()
+            && self.runtime().is_some_and(|runtime| {
+                runtime.supports_fp128_d64_digit_rows::<D>(1, plan.n_b, source.t_hat.len(), true)
+            })
+        {
+            return self.digit_relation_rows(prepared, source.t_hat, plan.n_b, true);
         }
         let rhs_abs_bound = source
             .z_segment
@@ -150,6 +163,7 @@ impl MetalBackend {
         prepared: &MetalPreparedSetup,
         digits: &[[i8; D]],
         num_rows: usize,
+        cyclic_only: bool,
     ) -> Result<RingSwitchRelationRows<F, D>, AkitaError> {
         let _span = tracing::info_span!(
             "MetalRingSwitch::digit_relation_rows",
@@ -235,11 +249,22 @@ impl MetalBackend {
                 .saturating_add(matrix.bytes.saturating_mul(usize::from(!matrix.cache_hit)));
         })
         .map_err(MetalCommitError::into_akita)?;
-        Ok(RingSwitchRelationRows {
-            d_negacyclic,
-            d_cyclic,
-            b_cyclic: Vec::new(),
-            a_quotients: Vec::new(),
+        // The same retained high product supplies B's cyclic rows. The
+        // 128-column reduction uses the exact [-4, 3] i32 accumulator bound.
+        Ok(if cyclic_only {
+            RingSwitchRelationRows {
+                d_negacyclic: Vec::new(),
+                d_cyclic: Vec::new(),
+                b_cyclic: d_cyclic,
+                a_quotients: Vec::new(),
+            }
+        } else {
+            RingSwitchRelationRows {
+                d_negacyclic,
+                d_cyclic,
+                b_cyclic: Vec::new(),
+                a_quotients: Vec::new(),
+            }
         })
     }
 }
@@ -369,5 +394,79 @@ mod tests {
         let metrics = metal.last_opening_metrics().unwrap().unwrap();
         assert_eq!(metrics.cpu_fallback_calls, 0);
         assert!(metrics.gpu_active_time > std::time::Duration::ZERO);
+    }
+    #[test]
+    fn b64_cyclic_relation_random_matches_cpu_and_dispatches() {
+        const D: usize = 64;
+        const MAX_COLUMNS: usize = 257;
+        const ROWS: usize = 3;
+        let setup = AkitaProverSetup::<F>::generate_with_capacity(
+            20,
+            1,
+            SetupMatrixCapacity {
+                num_field_elements: ROWS * MAX_COLUMNS * D,
+            },
+        )
+        .unwrap();
+        let cpu = CpuBackend::DEFAULT;
+        let cpu_prepared = cpu.prepare_setup(&setup).unwrap();
+        let metal = MetalBackend::new(MetalExecutionPolicy::RequireMetal).unwrap();
+        let metal_prepared = metal.prepare_setup(&setup).unwrap();
+        for log_basis_outer in [3] {
+            for columns in [1, 128, MAX_COLUMNS] {
+                let mut state = 0x352dae719a80_u64;
+                let digits = (0..columns)
+                    .map(|_| {
+                        std::array::from_fn(|_| {
+                            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                            let signed = (state >> 32) as i8;
+                            if log_basis_outer == 3 {
+                                (signed & 7) - 4
+                            } else {
+                                signed
+                            }
+                        })
+                    })
+                    .collect::<Vec<[i8; D]>>();
+                let source = RingSwitchRelationView {
+                    e_hat: &[],
+                    t_hat: &digits,
+                    z_segment: &[],
+                    z_folded_centered_inf_norm: 0,
+                };
+                let plan = RingSwitchRelationPlan {
+                    n_d: 0,
+                    n_b: ROWS,
+                    n_a: 0,
+                    log_basis_open: 3,
+                    log_basis_outer,
+                };
+                let expected = cpu.relation_rows(&cpu_prepared, source, plan).unwrap();
+                metal.begin_opening_metrics().unwrap();
+                let actual = metal.relation_rows(&metal_prepared, source, plan).unwrap();
+                assert_eq!(actual, expected);
+                let metrics = metal.last_opening_metrics().unwrap().unwrap();
+                assert_eq!(metrics.cpu_fallback_calls, 0);
+                assert!(metrics.gpu_active_time > std::time::Duration::ZERO);
+            }
+        }
+        let invalid = [[4_i8; D]];
+        let source = RingSwitchRelationView {
+            e_hat: &[],
+            t_hat: &invalid,
+            z_segment: &[],
+            z_folded_centered_inf_norm: 0,
+        };
+        let plan = RingSwitchRelationPlan {
+            n_d: 0,
+            n_b: ROWS,
+            n_a: 0,
+            log_basis_open: 3,
+            log_basis_outer: 3,
+        };
+        assert!(matches!(
+            metal.relation_rows(&metal_prepared, source, plan),
+            Err(AkitaError::InvalidInput(_))
+        ));
     }
 }
