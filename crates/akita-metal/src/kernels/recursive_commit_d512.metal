@@ -12,6 +12,7 @@ kernel void akita_fp128_recursive_commit_d512_matvec(
     device const int *inverse_scale [[buffer(7)]],
     constant RecursiveCommitParams &params [[buffer(8)]],
     constant PackedRecursiveCommitParams &packed [[buffer(9)]],
+    constant MatrixSpectrumLayout &layout [[buffer(10)]],
     uint thread_index [[thread_index_in_threadgroup]],
     uint3 threadgroup_index [[threadgroup_position_in_grid]])
 {
@@ -57,8 +58,8 @@ kernel void akita_fp128_recursive_commit_d512_matvec(
             int rhs = values[thread_index];
             for (uint row = 0u; row < (uint)params.num_rows; ++row) {
                 ulong matrix_ring = (ulong)row * params.num_cols + column;
-                ulong matrix_index = ((ulong)prime_index * params.matrix_rings + matrix_ring)
-                    * params.ring_d + (ulong)thread_index;
+                ulong matrix_index = (ulong)prime_index * layout.prime_stride
+                    + matrix_ring * layout.ring_stride + layout.frequency_offset + (ulong)thread_index;
                 accumulators[row] = d512_ntt_add(accumulators[row],
                     d512_ntt_mul(matrix_ntt[matrix_index], rhs, prime), prime.p);
             }

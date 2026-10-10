@@ -178,12 +178,19 @@ impl<const D: usize> RootCommitKernel<SuffixWitnessView<'_, F, D>, F, D> for Met
         }
         // Validate every source before preparing matrices or launching any GPU work.
         let matrix = prepared.recursive_matrix::<D>(runtime, parameters[0])?;
+        self.update_opening_metrics(|metrics| {
+            metrics.buffer_setup_time += matrix.prepare_time;
+            if !matrix.cache_hit {
+                metrics.allocation_bytes = metrics.allocation_bytes.saturating_add(matrix.bytes);
+            }
+        })
+        .map_err(MetalCommitError::into_akita)?;
         inputs
             .into_iter()
             .zip(parameters)
             .map(|(input, params)| {
                 let outcome = runtime
-                    .dispatch_fp128_recursive_commit::<D>(&matrix.buffer, input, params)
+                    .dispatch_fp128_recursive_commit::<D>(&matrix.view(), input, params)
                     .map_err(MetalCommitError::into_akita)?;
                 self.update_opening_metrics(|metrics| {
                     metrics.buffer_setup_time += outcome.timings.buffer_setup;
@@ -298,7 +305,13 @@ mod tests {
         assert_eq!(prepared.matrix_cache_entries().unwrap(), 1);
         assert_eq!(
             prepared.matrix_cache_bytes().unwrap(),
-            plan.n_a * plan.num_positions_per_block * num_digits_inner * D * 6 * size_of::<i32>()
+            plan.n_a
+                * plan.num_positions_per_block
+                * num_digits_inner
+                * 2
+                * D
+                * 6
+                * size_of::<i32>()
         );
         profiling::set_enabled(false);
     }

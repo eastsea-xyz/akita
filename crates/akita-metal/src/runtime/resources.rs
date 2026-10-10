@@ -388,6 +388,7 @@ impl MetalRuntime {
             .and_then(|count| count.checked_mul(D));
         let matrix_ntt_bytes = matrix_rings
             .and_then(|count| count.checked_mul(D))
+            .and_then(|count| count.checked_mul(2))
             .and_then(|count| count.checked_mul(FP128_D512_LINEAR_RELATION_NUM_PRIMES))
             .and_then(|count| count.checked_mul(size_of::<i32>()));
         let residue_bytes = num_blocks
@@ -421,9 +422,9 @@ impl MetalRuntime {
                     count.div_ceil(FP128_RECURSIVE_COMMIT_RECONSTRUCT_THREADS) <= u32::MAX as usize
                 })
             && self
-                .fp128_recursive_commit_matrix_ntt_pipeline
+                .fp128_relation_rows_matrix_ntt_pipeline
                 .max_total_threads_per_threadgroup()
-                >= D as u64
+                >= 512
             && matvec_pipeline.max_total_threads_per_threadgroup()
                 >= FP128_RECURSIVE_COMMIT_THREADS as u64
             && self

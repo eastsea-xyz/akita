@@ -14,6 +14,8 @@ use crate::MetalCommitError;
 #[path = "prepared/matrix_buffer.rs"]
 mod matrix_buffer;
 pub(crate) use matrix_buffer::MatrixBuffer;
+mod spectrum;
+pub(crate) use spectrum::{MatrixSpectrumLayout, RecursiveMatrixPreparation, RecursiveMatrixView};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct MatrixCacheKey {
@@ -39,7 +41,6 @@ pub struct MetalPreparedSetup {
     pub(crate) cpu: CpuPreparedSetup<F>,
     pub(crate) expanded: Arc<AkitaExpandedSetup<F>>,
     matrices: Mutex<Option<PreparedMatrix>>,
-    recursive_matrices: Mutex<HashMap<MatrixCacheKey, PreparedMatrix>>,
     linear_matrices: Mutex<HashMap<MatrixCacheKey, PreparedMatrix>>,
 }
 
@@ -49,7 +50,6 @@ impl MetalPreparedSetup {
             cpu,
             expanded,
             matrices: Mutex::new(None),
-            recursive_matrices: Mutex::new(HashMap::new()),
             linear_matrices: Mutex::new(HashMap::new()),
         }
     }
@@ -121,70 +121,25 @@ impl MetalPreparedSetup {
         &self,
         runtime: &MetalRuntime,
         params: RecursiveCommitParams,
-    ) -> Result<MatrixPreparation, AkitaError> {
-        let n_a = usize::try_from(params.num_rows)
+    ) -> Result<RecursiveMatrixPreparation, AkitaError> {
+        let rows = usize::try_from(params.num_rows)
             .map_err(|_| MetalCommitError::ShapeOverflow("recursive matrix rows").into_akita())?;
-        let active_a_cols = usize::try_from(params.num_cols).map_err(|_| {
+        let cols = usize::try_from(params.num_cols).map_err(|_| {
             MetalCommitError::ShapeOverflow("recursive matrix columns").into_akita()
         })?;
-        self.expanded
-            .shared_matrix
-            .ring_view_dyn(n_a, active_a_cols, D)?;
-        let key = MatrixCacheKey {
-            ring_d: D,
-            n_a,
-            active_a_cols,
-        };
-        let mut matrices = self
-            .recursive_matrices
-            .lock()
-            .map_err(|_| MetalCommitError::PoisonedLock.into_akita())?;
-        // Prime-major transforms embed their exact matrix-ring stride; unlike
-        // canonical prefixes, a larger transformed shape cannot serve this key.
-        if let Some(matrix) = matrices.get(&key) {
-            return Ok(MatrixPreparation {
-                buffer: matrix.buffer.clone(),
-                bytes: matrix.bytes,
-                cache_hit: true,
-                prepare_time: Duration::ZERO,
-            });
-        }
-        let start = Instant::now();
-        let count = checked::product([n_a, active_a_cols, D]).ok_or_else(|| {
-            MetalCommitError::ShapeOverflow("recursive matrix fields").into_akita()
+        self.expanded.shared_matrix.ring_view_dyn(rows, cols, D)?;
+        let rings = checked::product([rows, cols]).ok_or_else(|| {
+            MetalCommitError::ShapeOverflow("recursive matrix rings").into_akita()
         })?;
-        let fields = self
-            .expanded
-            .shared_matrix
-            .as_field_slice()
-            .get(..count)
-            .ok_or_else(|| {
-                AkitaError::InvalidSetup("recursive matrix prefix is unavailable".into())
-            })?;
-        // F's canonical storage matches Fp128Limbs (verified in field.rs).
-        // Borrow it when aligned, otherwise retain a shared copy only for this
-        // synchronous transform; no second raw matrix remains in the cache.
-        let input = runtime
-            .shared_slice_buffer(fields)
-            .map_err(MetalCommitError::into_akita)?;
-        let outcome = runtime
-            .prepare_fp128_recursive_commit_matrix::<D>(&input.buffer, params)
-            .map_err(MetalCommitError::into_akita)?;
-        let buffer = Arc::new(MatrixBuffer::from(outcome.buffer));
-        let bytes = outcome.allocation_bytes;
-        matrices.insert(
-            key,
-            PreparedMatrix {
-                buffer: buffer.clone(),
-                bytes,
-            },
-        );
-        Ok(MatrixPreparation {
-            buffer,
-            bytes,
-            cache_hit: false,
-            prepare_time: start.elapsed(),
-        })
+        if params.ring_d != D as u64 || params.matrix_rings != rings as u64 {
+            return Err(AkitaError::InvalidInput(
+                "recursive spectrum geometry".into(),
+            ));
+        }
+        // One ordinary prefix serves both domains. Never retain a duplicate D
+        // transform; the upper contiguous D frequencies carry its exact spectrum.
+        let matrix = self.linear_matrix::<D>(runtime, rings)?;
+        RecursiveMatrixPreparation::from_ordinary::<D>(matrix).map_err(MetalCommitError::into_akita)
     }
 
     /// Cache zero-padded 2D spectra of a flat matrix prefix. Role-specific row
@@ -270,17 +225,12 @@ impl MetalPreparedSetup {
             .lock()
             .map_err(|_| MetalCommitError::PoisonedLock)?
             .is_some();
-        let recursive = self
-            .recursive_matrices
-            .lock()
-            .map_err(|_| MetalCommitError::PoisonedLock)?
-            .len();
         let linear = self
             .linear_matrices
             .lock()
             .map_err(|_| MetalCommitError::PoisonedLock)?
             .len();
-        checked::sum([usize::from(canonical), recursive, linear])
+        checked::sum([usize::from(canonical), linear])
             .ok_or(MetalCommitError::ShapeOverflow("matrix cache entries"))
     }
 
@@ -290,10 +240,6 @@ impl MetalPreparedSetup {
             .matrices
             .lock()
             .map_err(|_| MetalCommitError::PoisonedLock)?;
-        let recursive = self
-            .recursive_matrices
-            .lock()
-            .map_err(|_| MetalCommitError::PoisonedLock)?;
         let linear = self
             .linear_matrices
             .lock()
@@ -301,7 +247,6 @@ impl MetalPreparedSetup {
         checked::sum(
             canonical
                 .iter()
-                .chain(recursive.values())
                 .chain(linear.values())
                 .map(|matrix| matrix.bytes),
         )
@@ -345,3 +290,7 @@ mod tests {
 #[cfg(test)]
 #[path = "prepared/canonical_tests.rs"]
 mod canonical_tests;
+
+#[cfg(test)]
+#[path = "prepared/spectrum_tests.rs"]
+mod spectrum_tests;

@@ -316,97 +316,35 @@ impl MetalRuntime {
             })
         })
     }
+    /// Every recursive matrix producer emits ordinary zero-padded 2D spectra.
+    /// Retained for direct runtime tests; prepared setup uses the same producer.
     pub(crate) fn prepare_fp128_recursive_commit_matrix<const D: usize>(
         &self,
         matrix: &Buffer,
         params: RecursiveCommitParams,
     ) -> Result<RecursiveCommitMatrixNttOutcome, MetalCommitError> {
-        autoreleasepool(|| {
-            let num_rows = usize::try_from(params.num_rows)
-                .map_err(|_| MetalCommitError::ShapeOverflow("recursive commit rows"))?;
-            let num_cols = usize::try_from(params.num_cols)
-                .map_err(|_| MetalCommitError::ShapeOverflow("recursive commit columns"))?;
-            let expected_matrix_rings =
-                num_rows
-                    .checked_mul(num_cols)
-                    .ok_or(MetalCommitError::ShapeOverflow(
-                        "recursive commit matrix rings",
-                    ))?;
-            let expected_matrix_bytes = expected_matrix_rings
-                .checked_mul(D)
-                .and_then(|count| count.checked_mul(size_of::<Fp128Limbs>()))
-                .ok_or(MetalCommitError::ShapeOverflow(
-                    "recursive commit matrix bytes",
-                ))?;
-            if params.ring_d != D as u64
-                || params.num_primes != FP128_D512_LINEAR_RELATION_NUM_PRIMES as u64
-                || params.matrix_rings != expected_matrix_rings as u64
-                || matrix.length() < expected_matrix_bytes as u64
-                || !self.supports_fp128_recursive_commit::<D>(
-                    1,
-                    num_rows,
-                    num_cols,
-                    params.rhs_abs_bound,
-                )
-            {
-                return Err(MetalCommitError::UnsupportedShape(
-                    "fp128 recursive commitment matrix geometry is unsupported".into(),
-                ));
-            }
-            let resources = self.recursive_commit_resources(D).ok_or_else(|| {
-                MetalCommitError::UnsupportedShape(format!(
-                    "no recursive commitment resources for D={D}"
-                ))
-            })?;
-
-            let buffer_start = Instant::now();
-            let matrix_ntt_count = expected_matrix_rings
-                .checked_mul(D)
-                .and_then(|count| count.checked_mul(FP128_D512_LINEAR_RELATION_NUM_PRIMES))
-                .ok_or(MetalCommitError::ShapeOverflow(
-                    "recursive commit transformed matrix",
-                ))?;
-            let matrix_ntt_bytes = matrix_ntt_count.checked_mul(size_of::<i32>()).ok_or(
-                MetalCommitError::ShapeOverflow("recursive commit transformed matrix bytes"),
-            )?;
-            let matrix_ntt = self.private_buffer(matrix_ntt_bytes)?;
-            let buffer_setup = buffer_start.elapsed();
-
-            let command = self.queue.new_command_buffer();
-            command.set_label("Akita fp128 recursive commitment matrix NTT");
-            let encoder = command.new_compute_command_encoder();
-            encoder.set_label("Akita recursive commitment matrix NTT");
-            encoder.set_compute_pipeline_state(&self.fp128_recursive_commit_matrix_ntt_pipeline);
-            encoder.set_buffer(0, Some(matrix), 0);
-            encoder.set_buffer(1, Some(&matrix_ntt), 0);
-            encoder.set_buffer(2, Some(&resources.primes), 0);
-            encoder.set_buffer(3, Some(&resources.limb_weights), 0);
-            encoder.set_buffer(4, Some(&resources.field_moduli), 0);
-            encoder.set_buffer(5, Some(&resources.fwd_twiddles), 0);
-            encoder.set_buffer(6, Some(&resources.psi_pows), 0);
-            set_inline_bytes(encoder, 7, &params);
-            encoder.dispatch_thread_groups(
-                MTLSize::new(params.matrix_rings * params.num_primes, 1, 1),
-                MTLSize::new(params.ring_d, 1, 1),
-            );
-            encoder.end_encoding();
-            let (command_wall, gpu) = complete_command(command)?;
-            Ok(RecursiveCommitMatrixNttOutcome {
-                buffer: matrix_ntt,
-                timings: DispatchTimings {
-                    buffer_setup,
-                    command_wall,
-                    gpu,
-                    readback_copy: Duration::ZERO,
-                },
-                allocation_bytes: matrix_ntt_bytes,
-            })
-        })
+        let rows = usize::try_from(params.num_rows)
+            .map_err(|_| MetalCommitError::ShapeOverflow("recursive matrix rows"))?;
+        let cols = usize::try_from(params.num_cols)
+            .map_err(|_| MetalCommitError::ShapeOverflow("recursive matrix columns"))?;
+        let rings = rows
+            .checked_mul(cols)
+            .ok_or(MetalCommitError::ShapeOverflow("recursive matrix rings"))?;
+        if params.ring_d != D as u64
+            || params.matrix_rings != rings as u64
+            || params.num_primes != FP128_D512_LINEAR_RELATION_NUM_PRIMES as u64
+            || !self.supports_fp128_recursive_commit::<D>(1, rows, cols, params.rhs_abs_bound)
+        {
+            return Err(MetalCommitError::UnsupportedShape(
+                "recursive ordinary spectrum preparation".into(),
+            ));
+        }
+        self.prepare_fp128_relation_rows_matrix::<D>(matrix, rings)
     }
 
     pub(crate) fn dispatch_fp128_recursive_commit<const D: usize>(
         &self,
-        matrix_ntt: &Buffer,
+        matrix: &crate::prepared::RecursiveMatrixView<'_>,
         input: RecursiveCommitInput<'_>,
         params: RecursiveCommitParams,
     ) -> Result<RecursiveCommitDispatchOutcome, MetalCommitError> {
@@ -427,13 +365,35 @@ impl MetalRuntime {
                 .checked_mul(num_rows)
                 .and_then(|count| count.checked_mul(D))
                 .ok_or(MetalCommitError::ShapeOverflow("recursive commit output"))?;
-            let expected_matrix_ntt_bytes = expected_matrix_rings
-                .checked_mul(D)
-                .and_then(|count| count.checked_mul(FP128_D512_LINEAR_RELATION_NUM_PRIMES))
-                .and_then(|count| count.checked_mul(size_of::<i32>()))
+            let layout: crate::prepared::MatrixSpectrumLayout = matrix.layout;
+            let expected_ring_stride =
+                (D as u64)
+                    .checked_mul(2)
+                    .ok_or(MetalCommitError::ShapeOverflow(
+                        "recursive spectrum ring stride",
+                    ))?;
+            let physical_bytes = layout
+                .prime_stride
+                .checked_mul(FP128_D512_LINEAR_RELATION_NUM_PRIMES as u64)
+                .and_then(|n| n.checked_mul(size_of::<i32>() as u64))
                 .ok_or(MetalCommitError::ShapeOverflow(
-                    "recursive commit transformed matrix bytes",
+                    "recursive spectrum physical bytes",
                 ))?;
+            if layout.ring_stride != expected_ring_stride
+                || layout.frequency_offset != D as u64
+                || layout.prime_stride == 0
+                || !layout.prime_stride.is_multiple_of(layout.ring_stride)
+                || layout.prime_stride / layout.ring_stride < expected_matrix_rings as u64
+                || matrix.buffer.length() != physical_bytes
+            {
+                return Err(MetalCommitError::UnsupportedShape(
+                    "recursive ordinary spectrum physical layout".into(),
+                ));
+            }
+            self.validate_buffer_length(
+                usize::try_from(physical_bytes)
+                    .map_err(|_| MetalCommitError::ShapeOverflow("recursive spectrum buffer"))?,
+            )?;
             let blocks_per_group = Self::recursive_commit_blocks_per_group::<D>();
             let expected_block_groups = num_blocks.div_ceil(blocks_per_group);
             if params.blocks_per_group != blocks_per_group as u64
@@ -442,7 +402,6 @@ impl MetalRuntime {
                 || params.num_primes != FP128_D512_LINEAR_RELATION_NUM_PRIMES as u64
                 || params.matrix_rings != expected_matrix_rings as u64
                 || params.output_coefficients != expected_output as u64
-                || matrix_ntt.length() < expected_matrix_ntt_bytes as u64
                 || !self.supports_fp128_recursive_commit::<D>(
                     num_blocks,
                     num_rows,
@@ -487,7 +446,7 @@ impl MetalRuntime {
                 &self.fp128_recursive_commit_matvec_pipeline
             });
             encoder.set_buffer(0, Some(&digit_buffer), 0);
-            encoder.set_buffer(1, Some(matrix_ntt), 0);
+            encoder.set_buffer(1, Some(matrix.buffer), 0);
             encoder.set_buffer(2, Some(&residues), 0);
             encoder.set_buffer(3, Some(&resources.primes), 0);
             encoder.set_buffer(4, Some(&resources.fwd_twiddles), 0);
@@ -496,6 +455,7 @@ impl MetalRuntime {
             encoder.set_buffer(7, Some(&resources.inverse_scale), 0);
             set_inline_bytes(encoder, 8, &params);
             set_inline_bytes(encoder, 9, &packed_params);
+            set_inline_bytes(encoder, 10, &layout);
             encoder.dispatch_thread_groups(
                 MTLSize::new(params.num_block_groups * params.num_primes, 1, 1),
                 MTLSize::new(FP128_RECURSIVE_COMMIT_THREADS as u64, 1, 1),

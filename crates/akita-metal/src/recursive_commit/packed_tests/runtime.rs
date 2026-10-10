@@ -65,14 +65,14 @@ fn raw_packed_parity<const D: usize>() {
         let matrix = prepared.recursive_matrix::<D>(runtime, p).unwrap();
         let expected = runtime
             .dispatch_fp128_recursive_commit::<D>(
-                &matrix.buffer,
+                &matrix.view(),
                 RecursiveCommitInput::Raw(&raw),
                 p,
             )
             .unwrap();
         let actual = runtime
             .dispatch_fp128_recursive_commit::<D>(
-                &matrix.buffer,
+                &matrix.view(),
                 RecursiveCommitInput::Packed {
                     owner: owner.clone(),
                     params: PackedRecursiveCommitParams {
@@ -158,4 +158,75 @@ fn packed_recursive_commit_source_descriptor_rejects_before_upload() {
     assert!(runtime
         .validate_recursive_commit_input::<128>(&RecursiveCommitInput::Raw(&[0]), p)
         .is_err());
+}
+
+#[test]
+fn shared_spectrum_explicit_view_rejects_bad_strides_before_upload() {
+    const D: usize = 128;
+    let setup = AkitaProverSetup::<F>::generate_with_capacity(
+        18,
+        1,
+        SetupMatrixCapacity {
+            num_field_elements: 4 * D,
+        },
+    )
+    .unwrap();
+    let backend = MetalBackend::new(MetalExecutionPolicy::RequireMetal).unwrap();
+    let prepared = backend.prepare_setup(&setup).unwrap();
+    let runtime = backend.runtime().unwrap();
+    let p = params::<D>(1);
+    let matrix = prepared.recursive_matrix::<D>(runtime, p).unwrap();
+    let view = matrix.view();
+    let raw = vec![0i8; 5 * 4 * D];
+    for layout in [
+        crate::prepared::MatrixSpectrumLayout {
+            ring_stride: D as u64,
+            ..view.layout
+        },
+        crate::prepared::MatrixSpectrumLayout {
+            frequency_offset: 0,
+            ..view.layout
+        },
+        crate::prepared::MatrixSpectrumLayout {
+            prime_stride: 1,
+            ..view.layout
+        },
+        crate::prepared::MatrixSpectrumLayout {
+            prime_stride: 2 * D as u64,
+            ..view.layout
+        },
+    ] {
+        let malformed = crate::prepared::RecursiveMatrixView {
+            buffer: view.buffer,
+            layout,
+        };
+        assert!(runtime
+            .dispatch_fp128_recursive_commit::<D>(&malformed, RecursiveCommitInput::Raw(&raw), p)
+            .is_err());
+    }
+}
+
+#[test]
+fn shared_spectrum_runtime_producer_is_explicit_ordinary_2d() {
+    const D: usize = 64;
+    let runtime = MetalRuntime::new().unwrap();
+    let p = params::<D>(1);
+    let fields = (0..4 * D)
+        .map(|i| Fp128Limbs::from_u128(i as u128 + 1))
+        .collect::<Vec<_>>();
+    let raw_matrix = runtime.shared_buffer_from_slice(&fields).unwrap();
+    let ordinary = runtime
+        .prepare_fp128_recursive_commit_matrix::<D>(&raw_matrix, p)
+        .unwrap();
+    assert_eq!(ordinary.allocation_bytes, 4 * 2 * D * 6 * size_of::<i32>());
+    let view =
+        crate::prepared::RecursiveMatrixView::from_ordinary_buffer::<D>(&ordinary.buffer).unwrap();
+    assert_eq!(view.layout.prime_stride, 4 * 2 * D as u64);
+    assert_eq!(view.layout.ring_stride, 2 * D as u64);
+    assert_eq!(view.layout.frequency_offset, D as u64);
+    let input = vec![1i8; 5 * 4 * D];
+    let output = runtime
+        .dispatch_fp128_recursive_commit::<D>(&view, RecursiveCommitInput::Raw(&input), p)
+        .unwrap();
+    assert_eq!(output.coefficients.len(), 5 * D);
 }
