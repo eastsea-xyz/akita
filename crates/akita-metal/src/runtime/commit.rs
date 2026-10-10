@@ -1,3 +1,4 @@
+use super::buffers::PackedSubmissionGuard;
 use super::*;
 
 impl MetalRuntime {
@@ -174,9 +175,7 @@ impl MetalRuntime {
             }
             params.columns_per_threadgroup = 1;
             let tasks_per_stream = self.d512_tasks_per_stream();
-            let base_streams = params
-                .num_blocks
-                .div_ceil(tasks_per_stream as u64);
+            let base_streams = params.num_blocks.div_ceil(tasks_per_stream as u64);
             let matrix_block_streams = base_streams
                 .checked_mul(FP128_D512_COEFFICIENT_BANDS as u64)
                 .ok_or(MetalCommitError::ShapeOverflow("coefficient-band streams"))?;
@@ -216,24 +215,37 @@ impl MetalRuntime {
             let active_zero_rows = self.shared_buffer_from_slice(active_zero_rows)?;
             let mut buffer_setup = buffer_start.elapsed();
 
-            let command_start = Instant::now();
+            let rows_per_position = params.ring_d / params.onehot_k;
+            let rows_per_block = params
+                .positions_per_block
+                .checked_mul(rows_per_position)
+                .ok_or(MetalCommitError::ShapeOverflow("packed rows per block"))?;
+            let live_rows = params
+                .full_blocks_per_column
+                .checked_mul(rows_per_block)
+                .ok_or(MetalCommitError::ShapeOverflow("packed live rows"))?;
             let command_count = base_streams.div_ceil(streams_per_command as u64) as usize;
+            let lane_buffer_start = Instant::now();
+            let mut lane_uploads =
+                self.packed_lane_uploads(source, live_rows, params.lane_stride, command_count)?;
+            buffer_setup += lane_buffer_start.elapsed();
+            let submission_capacity = command_count
+                .checked_add(1)
+                .ok_or(MetalCommitError::ShapeOverflow("packed submission count"))?;
+            // Declare after uploads: drop drains before borrowed lanes release.
+            let mut submissions = PackedSubmissionGuard::new(submission_capacity);
+            let command_start = Instant::now();
             let mut commands = Vec::with_capacity(command_count);
-            let mut lane_buffers = Vec::with_capacity(command_count);
-            let mut input_zero_copy = true;
             for first_stream in (0..base_streams).step_by(streams_per_command) {
                 let stream_count = (base_streams - first_stream).min(streams_per_command as u64);
                 let task_offset = first_stream * tasks_per_stream as u64;
                 let mut dispatch_params = params;
                 dispatch_params.task_offset = task_offset;
-                dispatch_params.dispatch_tasks = (stream_count
-                    * tasks_per_stream as u64)
-                    .min(params.num_blocks - task_offset);
+                dispatch_params.dispatch_tasks =
+                    (stream_count * tasks_per_stream as u64).min(params.num_blocks - task_offset);
                 let final_task = task_offset + dispatch_params.dispatch_tasks - 1;
                 let first_block = task_offset / params.num_columns;
                 let final_block = final_task / params.num_columns;
-                let rows_per_position = params.ring_d / params.onehot_k;
-                let rows_per_block = params.positions_per_block * rows_per_position;
                 let first_row = first_block * rows_per_block;
                 let final_row = (final_block + 1) * rows_per_block;
                 let first_row = usize::try_from(first_row)
@@ -244,9 +256,15 @@ impl MetalRuntime {
                     .map_err(|_| MetalCommitError::ShapeOverflow("packed lane stride"))?;
                 let command_lanes = source.wait_lanes(first_row..final_row, lane_stride)?;
                 let lane_buffer_start = Instant::now();
-                let lane_buffer = self.packed_lane_buffer(command_lanes)?;
+                let byte_offset =
+                    first_row
+                        .checked_mul(lane_stride)
+                        .ok_or(MetalCommitError::ShapeOverflow(
+                            "packed resident lane offset",
+                        ))?;
+                let (lane_buffer, lane_offset) =
+                    lane_uploads.buffer_for_window(self, command_lanes, byte_offset)?;
                 buffer_setup += lane_buffer_start.elapsed();
-                input_zero_copy &= lane_buffer.zero_copy;
                 dispatch_params.lane_row_offset = first_row as u64;
                 let command_threadgroups = dispatch_params
                     .n_a
@@ -263,7 +281,7 @@ impl MetalRuntime {
                 encoder.set_label("Akita packed fp128 D512 coefficient bands");
                 encoder.set_compute_pipeline_state(&self.packed_fp128_d512_pipeline);
                 encoder.set_buffer(0, Some(matrix), 0);
-                encoder.set_buffer(1, Some(&lane_buffer.buffer), 0);
+                encoder.set_buffer(1, Some(lane_buffer), lane_offset);
                 encoder.set_buffer(2, Some(&partials), 0);
                 set_inline_bytes(encoder, 3, &dispatch_params);
                 encoder.set_buffer(4, Some(&active_zero_rows), 0);
@@ -273,9 +291,9 @@ impl MetalRuntime {
                 );
                 encoder.end_encoding();
                 command.commit();
+                submissions.record(command);
                 crate::profiling::record_submission(command);
                 commands.push(command);
-                lane_buffers.push(lane_buffer);
             }
 
             let reduction_command = self.queue.new_command_buffer();
@@ -300,6 +318,7 @@ impl MetalRuntime {
             );
             reduction.end_encoding();
             reduction_command.commit();
+            submissions.record(reduction_command);
             crate::profiling::record_submission(reduction_command);
             reduction_command.wait_until_completed();
             let command_wall = command_start.elapsed();
@@ -318,6 +337,7 @@ impl MetalRuntime {
             let gpu = commands
                 .first()
                 .and_then(|first| completed_commands_gpu_span(first, reduction_command));
+            lane_uploads.stats.log(&params);
 
             let readback_start = Instant::now();
             // SAFETY: `output` is live shared storage for exactly `output_count`
@@ -343,7 +363,7 @@ impl MetalRuntime {
                 columns_per_threadgroup: 1,
                 matrix_block_streams: matrix_block_streams as usize,
                 scratch_bytes,
-                input_zero_copy,
+                input_zero_copy: lane_uploads.stats.input_zero_copy,
             })
         })
     }
@@ -479,13 +499,24 @@ impl MetalRuntime {
             let mut buffer_setup = buffer_start.elapsed();
 
             let source = ResidentPackedLanes { lanes };
-            let command_start = Instant::now();
-            let command_count = base_streams.div_ceil(streams_per_command as u64) as usize;
-            let mut commands = Vec::with_capacity(command_count);
-            let mut lane_buffers = Vec::with_capacity(command_count);
-            let mut input_zero_copy = true;
             // Two ring positions per trace row at K = 256, D = 128.
             let rows_per_block = params.positions_per_block / 2;
+            let live_rows = params
+                .full_blocks_per_column
+                .checked_mul(rows_per_block)
+                .ok_or(MetalCommitError::ShapeOverflow("packed live rows"))?;
+            let command_count = base_streams.div_ceil(streams_per_command as u64) as usize;
+            let lane_buffer_start = Instant::now();
+            let mut lane_uploads =
+                self.packed_lane_uploads(&source, live_rows, params.lane_stride, command_count)?;
+            buffer_setup += lane_buffer_start.elapsed();
+            let submission_capacity = command_count
+                .checked_add(1)
+                .ok_or(MetalCommitError::ShapeOverflow("packed submission count"))?;
+            // Declare after uploads: drop drains before borrowed lanes release.
+            let mut submissions = PackedSubmissionGuard::new(submission_capacity);
+            let command_start = Instant::now();
+            let mut commands = Vec::with_capacity(command_count);
             for first_stream in (0..base_streams).step_by(streams_per_command) {
                 let stream_count = (base_streams - first_stream).min(streams_per_command as u64);
                 let task_offset = first_stream * tasks_per_stream;
@@ -504,9 +535,15 @@ impl MetalRuntime {
                     .map_err(|_| MetalCommitError::ShapeOverflow("packed lane stride"))?;
                 let command_lanes = source.wait_lanes(first_row..final_row, lane_stride)?;
                 let lane_buffer_start = Instant::now();
-                let lane_buffer = self.packed_lane_buffer(command_lanes)?;
+                let byte_offset =
+                    first_row
+                        .checked_mul(lane_stride)
+                        .ok_or(MetalCommitError::ShapeOverflow(
+                            "packed resident lane offset",
+                        ))?;
+                let (lane_buffer, lane_offset) =
+                    lane_uploads.buffer_for_window(self, command_lanes, byte_offset)?;
                 buffer_setup += lane_buffer_start.elapsed();
-                input_zero_copy &= lane_buffer.zero_copy;
                 dispatch_params.lane_row_offset = first_row as u64;
                 let command_threadgroups = stream_count.checked_mul(groups_per_stream).ok_or(
                     MetalCommitError::ShapeOverflow("packed command threadgroups"),
@@ -518,7 +555,7 @@ impl MetalRuntime {
                 encoder.set_compute_pipeline_state(&self.packed_fp128_d128_rank3_pipeline);
                 let rank3_threads = self.d128_rank3_threads() as u64;
                 encoder.set_buffer(0, Some(matrix), 0);
-                encoder.set_buffer(1, Some(&lane_buffer.buffer), 0);
+                encoder.set_buffer(1, Some(lane_buffer), lane_offset);
                 encoder.set_buffer(2, Some(&partials), 0);
                 set_inline_bytes(encoder, 3, &dispatch_params);
                 encoder.set_buffer(4, Some(&active_zero_rows), 0);
@@ -528,9 +565,9 @@ impl MetalRuntime {
                 );
                 encoder.end_encoding();
                 command.commit();
+                submissions.record(command);
                 crate::profiling::record_submission(command);
                 commands.push(command);
-                lane_buffers.push(lane_buffer);
             }
 
             let reduction_command = self.queue.new_command_buffer();
@@ -555,6 +592,7 @@ impl MetalRuntime {
             );
             reduction.end_encoding();
             reduction_command.commit();
+            submissions.record(reduction_command);
             crate::profiling::record_submission(reduction_command);
             reduction_command.wait_until_completed();
             let command_wall = command_start.elapsed();
@@ -573,6 +611,7 @@ impl MetalRuntime {
             let gpu = commands
                 .first()
                 .and_then(|first| completed_commands_gpu_span(first, reduction_command));
+            lane_uploads.stats.log(&params);
 
             let readback_start = Instant::now();
             // SAFETY: `output` is live shared storage for exactly `output_count`
@@ -598,7 +637,7 @@ impl MetalRuntime {
                 columns_per_threadgroup: 1,
                 matrix_block_streams: threadgroups as usize,
                 scratch_bytes,
-                input_zero_copy,
+                input_zero_copy: lane_uploads.stats.input_zero_copy,
             })
         })
     }
