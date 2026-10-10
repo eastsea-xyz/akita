@@ -15,6 +15,14 @@ use std::time::Instant;
 impl<const D: usize> RingSwitchRelationKernel<RingSwitchRelationView<'_, D>, F, D>
     for MetalBackend
 {
+    fn sparse_high_half_batch(
+        &self,
+        challenges: &[akita_prover::compute::SparseChallenge],
+        batches: &[akita_prover::compute::SparseHighHalfBatch<'_, F, D>],
+    ) -> Result<Vec<CyclotomicRing<F, D>>, AkitaError> {
+        MetalBackend::sparse_high_half_batch::<D>(self, challenges, batches)
+    }
+
     fn relation_rows(
         &self,
         prepared: &MetalPreparedSetup,

@@ -43,6 +43,7 @@ mod relation_rows;
 mod relation_setup;
 mod resources;
 mod rows;
+pub(crate) mod sparse_high_half;
 mod witness_pack;
 pub(crate) use relation_rows::{RelationRowsInput, RelationRowsMode, RelationRowsParams};
 #[cfg(test)]
@@ -151,7 +152,9 @@ const KERNEL_SOURCE: &str = concat!(
     "\n",
     include_str!("kernels/recursive_fold.metal"),
     "\n",
-    include_str!("kernels/packed_recursive_commit.metal")
+    include_str!("kernels/packed_recursive_commit.metal"),
+    "\n",
+    include_str!("kernels/sparse_high_half.metal")
 );
 /// Largest D512 panel threadgroup; each GPU gets what its compiled pipeline
 /// allows (register pressure: 640 on M1 Max), rounded down to whole simdgroups.
@@ -1045,6 +1048,7 @@ pub(crate) struct MetalRuntime {
     fp128_relation_rows_rhs_ntt_pipeline: ComputePipelineState,
     fp128_relation_rows_matvec_inverse_pipeline: ComputePipelineState,
     fp128_relation_rows_reconstruct_pipeline: ComputePipelineState,
+    sparse_high_half_pipeline: ComputePipelineState,
     witness_pack_pipeline: ComputePipelineState,
     recursive_evaluate_fold_pipeline: ComputePipelineState,
     recursive_fold_evaluation_pipeline: ComputePipelineState,
@@ -1190,6 +1194,7 @@ impl MetalRuntime {
             fp128_relation_rows_reconstruct_pipeline: pipeline(
                 FP128_RELATION_ROWS_RECONSTRUCT_KERNEL_NAME,
             )?,
+            sparse_high_half_pipeline: pipeline("akita_fp128_sparse_product_high_half_batch")?,
             witness_pack_pipeline: pipeline("akita_centered_witness_z_pack")?,
             recursive_evaluate_fold_pipeline: pipeline("akita_fp128_recursive_evaluate_fold")?,
             recursive_fold_evaluation_pipeline: pipeline("akita_fp128_recursive_fold_evaluation")?,

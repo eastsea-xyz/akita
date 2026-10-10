@@ -67,6 +67,8 @@ mod ring_switch;
 )]
 mod runtime;
 #[cfg(target_os = "macos")]
+mod sparse_high_half;
+#[cfg(target_os = "macos")]
 mod witness_pack;
 
 #[cfg(target_os = "macos")]

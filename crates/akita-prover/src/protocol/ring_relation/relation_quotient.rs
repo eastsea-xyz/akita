@@ -3,7 +3,7 @@ use crate::api::commitment::for_each_outer_slice_input;
 use crate::backend::RingSwitchRelationView;
 use crate::compute::{
     OperationCtx, RingSwitchProveBackend, RingSwitchRelationKernel, RingSwitchRelationPlan,
-    RuntimeRingSwitchProveBackend,
+    RuntimeRingSwitchProveBackend, SparseHighHalfBatch,
 };
 use crate::protocol::ring_relation::{CompressionSourceId, CompressionWitnessMaterialization};
 use crate::protocol::ring_switch::PreparedRingSwitchGroup;
@@ -25,74 +25,6 @@ pub(crate) fn reset_multi_group_quotient_calls() {
 #[cfg(test)]
 pub(crate) fn multi_group_quotient_calls() -> usize {
     MULTI_GROUP_QUOTIENT_CALLS.get()
-}
-
-#[inline]
-fn accumulate_small_signed<F: Field + Ring>(dst: &mut F, value: F, coeff: i64) {
-    match coeff {
-        1 => *dst += value,
-        -1 => *dst -= value,
-        2 => {
-            *dst += value;
-            *dst += value;
-        }
-        -2 => {
-            *dst -= value;
-            *dst -= value;
-        }
-        _ => *dst += value * F::from_i64(coeff),
-    }
-}
-
-/// Add only the high-half quotient contribution of `challenge * ring`.
-///
-/// Skips the first `D - pos` coefficients per challenge term that cannot
-/// contribute (degree < D), cutting iteration count roughly in half.
-#[inline(always)]
-fn add_sparse_ring_product_high_half<
-    F: Field + CanonicalEncoding + akita_serialization::AkitaSerialize,
-    const D: usize,
->(
-    quotient: &mut [F],
-    challenge: &SparseChallenge,
-    ring: &CyclotomicRing<F, D>,
-) {
-    let rc = ring.coefficients();
-    for (&pos, &coeff) in challenge.positions.iter().zip(challenge.coeffs.iter()) {
-        let p = pos as usize;
-        for s in (D - p)..D {
-            accumulate_small_signed(&mut quotient[p + s - D], rc[s], i64::from(coeff));
-        }
-    }
-}
-
-fn parallel_high_half_accumulate<F, R, const D: usize>(
-    challenges: &Challenges,
-    ring_fn: R,
-) -> Result<Vec<F>, AkitaError>
-where
-    F: Field + CanonicalEncoding + akita_serialization::AkitaSerialize + Send + Sync,
-    R: Fn(usize) -> Option<CyclotomicRing<F, D>> + Sync,
-{
-    let total = challenges.len();
-    let out = cfg_fold_reduce!(
-        0..total,
-        || vec![F::zero(); D],
-        |mut acc: Vec<F>, i: usize| {
-            let Some(ring) = ring_fn(i) else {
-                return acc;
-            };
-            add_sparse_ring_product_high_half::<F, D>(&mut acc, &challenges.as_slice()[i], &ring);
-            acc
-        },
-        |mut a: Vec<F>, b: Vec<F>| {
-            for (ai, bi) in a.iter_mut().zip(b.iter()) {
-                *ai += *bi;
-            }
-            a
-        }
-    );
-    Ok(out)
 }
 
 #[derive(Clone)]
@@ -287,7 +219,10 @@ where
     }
     let a_quotients = relation_rows.a_quotients;
 
-    let consistency_quotient = match &group.folded_opening {
+    // Preserve the physical native-A view from the prior CPU accumulator.
+    // A challenge is already indexed by claim * live_blocks + block; the
+    // recomposed view therefore reads challenge_index * n_a + a_row.
+    let (packing_consistency, consistency_source) = match &group.folded_opening {
         OpeningFamily::EvaluationTrace(e_folded)
             if group_opening.coefficient_packing_geometry().is_none() =>
         {
@@ -304,23 +239,22 @@ where
                     group.params.log_basis_inner(),
                 )?
             };
-            let quotient =
-                parallel_high_half_accumulate::<F, _, D>(challenges, |i| e_folded.get(i).copied())?;
-            let mut consistency_quotient = CyclotomicRing::from_slice(&quotient);
-            consistency_quotient -= consistency_z_quotient;
-            RelationQuotientOutput::row_from_ring(consistency_quotient)?
+            (None, Some((e_folded, consistency_z_quotient)))
         }
         OpeningFamily::SubringCoefficientPacking(product)
             if Some(product.geometry()) == group_opening.coefficient_packing_geometry() =>
         {
             let geometry = product.geometry();
-            RelationQuotientOutput::from_physical_coordinates(
-                RelationRowGeometry::new(
-                    geometry.challenge_subring_dimension(),
-                    geometry.extension_degree(),
-                )?,
-                product.quotient_high_half_base_field_coordinates().to_vec(),
-            )?
+            (
+                Some(RelationQuotientOutput::from_physical_coordinates(
+                    RelationRowGeometry::new(
+                        geometry.challenge_subring_dimension(),
+                        geometry.extension_degree(),
+                    )?,
+                    product.quotient_high_half_base_field_coordinates().to_vec(),
+                )?),
+                None,
+            )
         }
         _ => {
             return Err(AkitaError::InvalidSetup(
@@ -328,25 +262,38 @@ where
             ));
         }
     };
-
-    let num_live_blocks_per_claim = group.params.num_live_blocks();
-    let mut a_rows = Vec::with_capacity(n_a);
-    for (a_idx, a_q) in a_quotients.iter().enumerate() {
-        let mut quotient = parallel_high_half_accumulate::<F, _, D>(challenges, |i| {
-            let claim_idx = i / num_live_blocks_per_claim;
-            let block_idx = i % num_live_blocks_per_claim;
-            let inner_idx = claim_idx * num_live_blocks_per_claim + block_idx;
-            recomposed_inner_rows
-                .get(inner_idx.checked_mul(n_a)?.checked_add(a_idx)?)
-                .copied()
-        })?;
-        for (dst, src) in quotient.iter_mut().zip(a_q.coefficients()) {
-            *dst -= *src;
-        }
-        a_rows.push(RelationQuotientOutput::row_from_ring(
-            CyclotomicRing::<F, D>::from_slice(&quotient),
-        )?);
+    let mut high_half_batches = Vec::with_capacity(n_a + usize::from(consistency_source.is_some()));
+    if let Some((rings, subtract)) = consistency_source.as_ref() {
+        high_half_batches.push(SparseHighHalfBatch {
+            rings,
+            first_ring: 0,
+            ring_stride: 1,
+            subtract: Some(subtract),
+        });
     }
+    for (a_row, subtract) in a_quotients.iter().enumerate() {
+        high_half_batches.push(SparseHighHalfBatch {
+            rings: recomposed_inner_rows,
+            first_ring: a_row,
+            ring_stride: n_a,
+            subtract: Some(subtract),
+        });
+    }
+    let high_halves = <B as RingSwitchRelationKernel<RingSwitchRelationView<'_, D>, F, D>>::sparse_high_half_batch(
+        backend, challenges.as_slice(), &high_half_batches,
+    )?;
+    if high_halves.len() != high_half_batches.len() {
+        return Err(AkitaError::InvalidProof);
+    }
+    let mut high_halves = high_halves.into_iter();
+    let consistency_quotient = if let Some(row) = packing_consistency {
+        row
+    } else {
+        RelationQuotientOutput::row_from_ring(high_halves.next().ok_or(AkitaError::InvalidProof)?)?
+    };
+    let a_rows = high_halves
+        .map(RelationQuotientOutput::row_from_ring)
+        .collect::<Result<Vec<_>, _>>()?;
     Ok((consistency_quotient, a_rows))
 }
 
@@ -830,7 +777,22 @@ mod tests {
             .collect::<Vec<_>>();
         let challenges = Challenges::from_sparse(sparse.clone(), sparse.len(), 1).unwrap();
 
-        let got = parallel_high_half_accumulate::<F, _, D>(&challenges, |idx| rings[idx]).unwrap();
+        let live_rings = rings.iter().filter_map(|ring| *ring).collect::<Vec<_>>();
+        let got = <crate::compute::CpuBackend as RingSwitchRelationKernel<
+            RingSwitchRelationView<'_, D>,
+            F,
+            D,
+        >>::sparse_high_half_batch(
+            &crate::compute::CpuBackend::DEFAULT,
+            challenges.as_slice(),
+            &[SparseHighHalfBatch {
+                rings: &live_rings,
+                first_ring: 0,
+                ring_stride: 1,
+                subtract: None,
+            }],
+        )
+        .unwrap();
         let mut expected = vec![F::zero(); D];
         for (idx, ring) in rings.iter().enumerate() {
             if let Some(ring) = ring {
@@ -839,7 +801,7 @@ mod tests {
             }
         }
 
-        assert_eq!(got, expected);
+        assert_eq!(got[0].coefficients().as_slice(), expected);
     }
 
     #[test]

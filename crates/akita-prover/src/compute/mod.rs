@@ -32,7 +32,10 @@ mod plans;
 mod poly;
 mod requirements;
 mod runtime_capabilities;
+mod sparse_high_half;
 mod stack;
+
+pub use akita_challenges::SparseChallenge;
 
 pub use backend::{
     CompressionComputeBackend, CompressionRowsProducts, ComputeBackendSetup,
@@ -52,6 +55,7 @@ pub use operation_plans::{
 pub(crate) use plans::DenseCommitInput;
 pub use plans::RingSwitchRelationRows;
 pub use requirements::{NttExecutionRequirements, NttOperationCluster, RoutedNttRequirement};
+pub use sparse_high_half::SparseHighHalfBatch;
 
 pub use poly::{
     centered_reach_of_field_coeffs, CommitBackendFor, OpeningProveBackendFor, ProveFlowBackendFor,

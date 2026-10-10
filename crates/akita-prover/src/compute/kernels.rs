@@ -4,9 +4,11 @@ use crate::compute::operation_plans::{
     RingSwitchRelationPlan, SubringCoefficientPackingPartials, SubringCoefficientPackingPlan,
 };
 use crate::compute::plans::RingSwitchRelationRows;
+use crate::compute::sparse_high_half::SparseHighHalfBatch;
 use crate::{CommitInnerWitness, DecomposeFoldWitness};
+use akita_challenges::SparseChallenge;
 use akita_error::AkitaError;
-use jolt_field::{CanonicalEncoding, ExtField, Field, MulBaseUnreduced};
+use jolt_field::{CanonicalEncoding, ExtField, Field, MulBaseUnreduced, Ring};
 
 /// Outcome of a batched decompose-fold kernel invocation.
 #[derive(Debug)]
@@ -47,6 +49,19 @@ pub trait RingSwitchRelationKernel<S, F, const D: usize>: ComputeBackendSetup<F>
 where
     F: Field + CanonicalEncoding,
 {
+    /// Exact sparse ordinary-product high halves for borrowed strided rows.
+    /// Repeated positions are additive; missing rings contribute zero.
+    fn sparse_high_half_batch(
+        &self,
+        challenges: &[SparseChallenge],
+        batches: &[SparseHighHalfBatch<'_, F, D>],
+    ) -> Result<Vec<akita_algebra::CyclotomicRing<F, D>>, AkitaError>
+    where
+        F: Ring,
+    {
+        crate::compute::sparse_high_half::cpu_sparse_high_half_batch(challenges, batches)
+    }
+
     /// Fused D rows in both domains, B cyclic rows, and A-side quotient rows.
     fn relation_rows(
         &self,

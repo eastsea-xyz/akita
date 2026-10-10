@@ -20,7 +20,6 @@ use akita_types::{gadget_row_scalars, DigitBlocks};
 use akita_types::{
     CommittedGroupParams, OpeningFamily, RingRelationGroupOpening, RingRelationInstance,
 };
-use jolt_field::solinas::parallel::*;
 use jolt_field::Unreduced;
 use jolt_field::{CanonicalEncoding, Field, Ring};
 
