@@ -20,7 +20,6 @@ use akita_algebra::CyclotomicRing;
 use akita_challenges::SparseChallenge;
 use akita_error::AkitaError;
 use akita_types::SubfieldMultiplierOpeningPoint;
-use jolt_field::solinas::parallel::*;
 use jolt_field::{CanonicalEncoding, Field};
 use std::array::from_fn;
 

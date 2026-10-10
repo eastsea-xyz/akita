@@ -1,7 +1,6 @@
 use akita_error::AkitaError;
 use akita_prover::compute::{CommitInnerPlan, DecomposeFoldPlan, RootCommitKernel};
 use akita_prover::{CommitInnerWitness, DecomposeFoldWitness, OneHotPoly, RootCommitSource};
-use jolt_field::One;
 
 use crate::backend::MetalBackend;
 use crate::field::F;

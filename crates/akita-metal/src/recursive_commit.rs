@@ -5,7 +5,7 @@ use akita_prover::backend::DenseView;
 use akita_prover::compute::{CommitInnerPlan, RootCommitKernel};
 use akita_prover::{CommitInnerWitness, SuffixWitnessView};
 use akita_types::{balanced_signed_digit_abs_bound, RingVec, MAX_I8_LOG_BASIS};
-use jolt_field::{CanonicalEncoding, Field, One, Zero};
+use jolt_field::{One, Ring, Zero};
 
 use crate::field::F;
 use crate::runtime::{
@@ -199,6 +199,7 @@ impl<const D: usize> RootCommitKernel<SuffixWitnessView<'_, F, D>, F, D> for Met
 
 #[cfg(test)]
 mod tests {
+    use jolt_field::Ring;
     use akita_prover::compute::{CommitInnerPlan, RootCommitKernel};
     use akita_prover::{
         AkitaProverSetup, ComputeBackendSetup, CpuBackend, DensePoly, RecursiveWitnessFlat,
@@ -348,7 +349,6 @@ mod tests {
     #[test]
     fn dense_advice_commit_is_counted_as_cpu_fallback() {
         use akita_algebra::CyclotomicRing;
-        use jolt_field::Field;
 
         const D: usize = 512;
         let plan = CommitInnerPlan {
