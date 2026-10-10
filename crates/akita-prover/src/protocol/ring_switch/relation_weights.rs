@@ -55,6 +55,7 @@ pub struct RelationWeightEventInputs<'a, F: Field, E: Field> {
 }
 
 mod events;
+use events::{FactoredWeightSink, RelationWeightTarget};
 pub use events::{RelationWeightEvents, RelationWeightFactorization};
 pub(super) use reduced_dense::build_reduced_dense_relation_weights;
 
@@ -145,14 +146,14 @@ enum LiftedEtSetup<'a, E: Field> {
     Deferred,
 }
 
-struct LiftedEtSink<'a, E: Field> {
-    events: &'a mut RelationWeightEvents<E>,
+struct LiftedEtSink<'a, E: Field, S: RelationWeightTarget<E>> {
+    events: &'a mut S,
     plan: &'a compiler::RelationWeightGroupPlan<E>,
     challenge_evaluations: &'a [E],
     setup: LiftedEtSetup<'a, E>,
 }
 
-impl<E: Field> EtWeightSink<E> for LiftedEtSink<'_, E> {
+impl<E: Field, S: RelationWeightTarget<E>> EtWeightSink<E> for LiftedEtSink<'_, E, S> {
     fn add_e(
         &mut self,
         physical_start: usize,
@@ -225,14 +226,14 @@ enum LiftedZSetup<'a, E: Field> {
     Deferred,
 }
 
-struct LiftedZSink<'a, E: Field> {
-    events: &'a mut RelationWeightEvents<E>,
+struct LiftedZSink<'a, E: Field, S: RelationWeightTarget<E>> {
+    events: &'a mut S,
     plan: &'a compiler::RelationWeightGroupPlan<E>,
     opening_evaluations: &'a [E],
     setup: LiftedZSetup<'a, E>,
 }
 
-impl<E: Field> ZWeightSink<E> for LiftedZSink<'_, E> {
+impl<E: Field, S: RelationWeightTarget<E>> ZWeightSink<E> for LiftedZSink<'_, E, S> {
     fn add_z(
         &mut self,
         physical_start: usize,
@@ -266,10 +267,8 @@ impl<E: Field> ZWeightSink<E> for LiftedZSink<'_, E> {
 }
 
 /// Emit the complete checked relation semantics for one fold.
-pub(super) type RelationWeightBuild<E> = (
-    RelationWeightEvents<E>,
-    OpeningFamily<(), CoefficientPackingBatchSemantics<E>>,
-);
+pub(super) type RelationWeightBuild<E, S = RelationWeightEvents<E>> =
+    (S, OpeningFamily<(), CoefficientPackingBatchSemantics<E>>);
 
 #[tracing::instrument(skip_all, name = "build_relation_weight_events")]
 pub fn build_relation_weight_events<F, E>(
@@ -278,6 +277,43 @@ pub fn build_relation_weight_events<F, E>(
 where
     F: Field + CanonicalEncoding + akita_serialization::AkitaSerialize,
     E: FpExtEncoding<F> + Ring + ExtField<F> + MulBaseUnreduced<F>,
+{
+    build_relation_weights(
+        inputs,
+        |alpha_powers, relation_coefficient_block_len, physical_field_len, setup_is_deferred| {
+            Ok(RelationWeightEvents {
+                events: Vec::new(),
+                alpha_powers,
+                relation_coefficient_block_len,
+                physical_field_len,
+                setup_is_deferred,
+            })
+        },
+    )
+}
+
+/// Compile checked QuotientLift contributions directly into factored lanes.
+/// The public stored-event builder and factor_common_alpha remain the oracle.
+#[tracing::instrument(skip_all, name = "compile_relation_weight_factorization")]
+pub(crate) fn compile_relation_weight_factorization<F, E>(
+    inputs: RelationWeightEventInputs<'_, F, E>,
+) -> Result<RelationWeightBuild<E, RelationWeightFactorization<E>>, AkitaError>
+where
+    F: Field + CanonicalEncoding + akita_serialization::AkitaSerialize,
+    E: FpExtEncoding<F> + Ring + ExtField<F> + MulBaseUnreduced<F>,
+{
+    let (target, opening_semantics) = build_relation_weights(inputs, FactoredWeightSink::new)?;
+    Ok((target.finish()?, opening_semantics))
+}
+
+fn build_relation_weights<F, E, S>(
+    inputs: RelationWeightEventInputs<'_, F, E>,
+    target: impl FnOnce(Vec<E>, usize, usize, bool) -> Result<S, AkitaError>,
+) -> Result<(S, OpeningFamily<(), CoefficientPackingBatchSemantics<E>>), AkitaError>
+where
+    F: Field + CanonicalEncoding + akita_serialization::AkitaSerialize,
+    E: FpExtEncoding<F> + Ring + ExtField<F> + MulBaseUnreduced<F>,
+    S: RelationWeightTarget<E>,
 {
     let RelationWeightEventInputs {
         setup,
@@ -371,9 +407,8 @@ where
         OpeningFamily::EvaluationTrace(()) => &[][..],
         OpeningFamily::SubringCoefficientPacking(batch) => batch.groups(),
     };
-    let mut relation_events = RelationWeightEvents {
-        events: Vec::new(),
-        alpha_powers: scalar_powers(
+    let mut relation_events = target(
+        scalar_powers(
             alpha,
             quotient_row_dims
                 .iter()
@@ -384,7 +419,7 @@ where
         relation_coefficient_block_len,
         physical_field_len,
         setup_is_deferred,
-    };
+    )?;
     let mut packing_semantics_by_group = vec![None; opening_batch.num_groups()];
     for semantics in coefficient_packing_groups {
         let group_index = semantics.group_index();
@@ -456,7 +491,7 @@ where
                 1,
                 1,
                 |coefficients| {
-                    Ok(vec![eval_flat_ring_at_pows_fast(
+                    Ok([eval_flat_ring_at_pows_fast(
                         coefficients,
                         &group_alpha_pows_d,
                     )])
@@ -474,7 +509,7 @@ where
                 group_plan.witness.slice_count,
                 1,
                 |coefficients| {
-                    Ok(vec![eval_flat_ring_at_pows_fast(
+                    Ok([eval_flat_ring_at_pows_fast(
                         coefficients,
                         &group_alpha_pows_b,
                     )])
@@ -534,7 +569,7 @@ where
                     1,
                     1,
                     |coefficients| {
-                        Ok(vec![eval_flat_ring_at_pows_fast(
+                        Ok([eval_flat_ring_at_pows_fast(
                             coefficients,
                             &group_alpha_pows_a,
                         )])
@@ -576,7 +611,7 @@ where
         }
         let eq_weight = compilation.row_weights[row];
         let row_alpha_pows = if row_dim == d_a {
-            relation_events.alpha_powers.as_slice()
+            relation_events.alpha_powers()
         } else if row_dim == d_b {
             alpha_pows_b.as_slice()
         } else if row_dim == d_d {

@@ -592,3 +592,60 @@ fn recursive_packing_phases_share_one_relation_authority() {
         semantics.stage2_terms().scalar_claim_weight() * authenticated_opening,
     );
 }
+
+#[test]
+fn direct_factored_compiler_matches_complete_degree_two_packing_reference() {
+    use crate::protocol::ring_switch::{
+        build_relation_weight_events, compile_relation_weight_factorization, RelationSetupSource,
+        RelationWeightEventInputs,
+    };
+    use jolt_field::ExtField;
+    for basis in [BasisMode::Lagrange, BasisMode::Monomial] {
+        let fixture = fixture_for_basis(basis);
+        let setup_field_len = 1usize << 18;
+        let setup = AkitaExpandedSetup::from_trusted_seed_derived_parts_unchecked(
+            AkitaSetupDescriptor {
+                max_num_vars: 0,
+                max_num_batched_polys: 0,
+                num_field_elements: setup_field_len,
+                setup_seed: [0u8; 32].into(),
+            },
+            FlatMatrix::from_flat_data(
+                (0..setup_field_len)
+                    .map(|index| F::from_u64(1 + index as u64))
+                    .collect(),
+            ),
+        );
+        let opening_ring_dim = fixture.params.role_dims().d_d();
+        let prepared_points = [(0, &fixture.prepared_point)];
+        let alpha = E::from_base_slice(&[F::from_u64(17), F::from_u64(19)]);
+        let inputs = |source| RelationWeightEventInputs {
+            setup: source,
+            instance: &fixture.relation,
+            alpha,
+            level_params: &fixture.params,
+            relation_row_point: &fixture.tau1,
+            claim_coefficients: &fixture.claim_coefficients,
+            opening_source_len: fixture.relation_plan.digit_witness_domain().domain_len()
+                / opening_ring_dim,
+            opening_ring_dim,
+            relation_plan: &fixture.relation_plan,
+            opening_points: OpeningFamily::SubringCoefficientPacking(&prepared_points),
+        };
+        let (oracle, oracle_semantics) =
+            build_relation_weight_events(inputs(RelationSetupSource::Matrix(&setup))).unwrap();
+        let (direct, direct_semantics) =
+            compile_relation_weight_factorization(inputs(RelationSetupSource::Matrix(&setup)))
+                .unwrap();
+        assert_eq!(direct, oracle.factor_common_alpha().unwrap());
+        assert_eq!(
+            direct.materialize_dense().unwrap(),
+            oracle.materialize_dense().unwrap()
+        );
+        assert_eq!(direct_semantics, oracle_semantics);
+        assert!(
+            compile_relation_weight_factorization(inputs(RelationSetupSource::DeferredClaim))
+                .is_err()
+        );
+    }
+}

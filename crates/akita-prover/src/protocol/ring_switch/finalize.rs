@@ -176,8 +176,8 @@ where
         let _span = tracing::info_span!("relation_weight_compilation").entered();
         match lp.ring_relation_mode {
             akita_types::RingRelationMode::QuotientLift => {
-                let (events, opening_semantics) =
-                    build_relation_weight_events(RelationWeightEventInputs {
+                let (ordinary, opening_semantics) =
+                    compile_relation_weight_factorization(RelationWeightEventInputs {
                         setup: RelationSetupSource::Matrix(setup),
                         instance,
                         alpha,
@@ -189,7 +189,6 @@ where
                         relation_plan: &relation_plan,
                         opening_points,
                     })?;
-                let ordinary = events.factor_common_alpha()?;
                 let compression = if lp.payload_mode.is_compressed() {
                     super::RingSwitchCompression::QuotientLift {
                         weights: akita_types::build_compression_relation_weights(

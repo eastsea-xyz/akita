@@ -287,3 +287,187 @@ impl<E: Field> RelationWeightEvents<E> {
         Ok(evaluation)
     }
 }
+
+/// Internal emission target shared by canonical lifted E/T/Z address walkers.
+/// The stored-event target remains the public oracle; the factored target
+/// consumes the same checked contributions directly into padded lanes.
+pub(super) trait RelationWeightTarget<E: Field> {
+    fn alpha_powers(&self) -> &[E];
+
+    fn push(
+        &mut self,
+        physical_start: usize,
+        coefficient_count: usize,
+        alpha_exponent_start: usize,
+        scalar: E,
+        contribution: RelationWeightContribution,
+    ) -> Result<(), AkitaError>;
+
+    fn push_native_ring(
+        &mut self,
+        physical_start: usize,
+        role_ring_dimension: usize,
+        scalar: E,
+        contribution: RelationWeightContribution,
+    ) -> Result<(), AkitaError> {
+        if role_ring_dimension == 0 {
+            return Err(AkitaError::InvalidProof);
+        }
+        self.push(physical_start, role_ring_dimension, 0, scalar, contribution)
+    }
+
+    fn extend_events(
+        &mut self,
+        events: impl IntoIterator<Item = RelationWeightEvent<E>>,
+    ) -> Result<(), AkitaError> {
+        for event in events {
+            self.push(
+                event.physical_coefficients().start,
+                event.physical_coefficients().len(),
+                event.alpha_exponent_start(),
+                event.scalar(),
+                event.contribution(),
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl<E: Field> RelationWeightTarget<E> for RelationWeightEvents<E> {
+    fn alpha_powers(&self) -> &[E] {
+        &self.alpha_powers
+    }
+
+    fn push(
+        &mut self,
+        physical_start: usize,
+        coefficient_count: usize,
+        alpha_exponent_start: usize,
+        scalar: E,
+        contribution: RelationWeightContribution,
+    ) -> Result<(), AkitaError> {
+        RelationWeightEvents::push(
+            self,
+            physical_start,
+            coefficient_count,
+            alpha_exponent_start,
+            scalar,
+            contribution,
+        )
+    }
+    fn push_native_ring(
+        &mut self,
+        physical_start: usize,
+        role_ring_dimension: usize,
+        scalar: E,
+        contribution: RelationWeightContribution,
+    ) -> Result<(), AkitaError> {
+        RelationWeightEvents::push_native_ring(
+            self,
+            physical_start,
+            role_ring_dimension,
+            scalar,
+            contribution,
+        )
+    }
+
+    fn extend_events(
+        &mut self,
+        events: impl IntoIterator<Item = RelationWeightEvent<E>>,
+    ) -> Result<(), AkitaError> {
+        RelationWeightEvents::extend_events(self, events)
+    }
+}
+
+pub(super) struct FactoredWeightSink<E: Field> {
+    alpha_powers: Vec<E>,
+    relation_coefficient_block_len: usize,
+    physical_field_len: usize,
+    relation_lane_weights: Vec<E>,
+}
+
+impl<E: Field> FactoredWeightSink<E> {
+    pub(super) fn new(
+        alpha_powers: Vec<E>,
+        relation_coefficient_block_len: usize,
+        physical_field_len: usize,
+        setup_is_deferred: bool,
+    ) -> Result<Self, AkitaError> {
+        if setup_is_deferred {
+            return Err(AkitaError::InvalidSetup(
+                "relation factorization requires direct setup contributions".into(),
+            ));
+        }
+        let lane_capacity = physical_field_len
+            .checked_div(relation_coefficient_block_len)
+            .filter(|capacity| capacity.is_power_of_two())
+            .ok_or_else(|| AkitaError::InvalidSetup("relation lane capacity is invalid".into()))?;
+        if !relation_coefficient_block_len.is_power_of_two()
+            || !physical_field_len.is_multiple_of(relation_coefficient_block_len)
+            || alpha_powers.len() < relation_coefficient_block_len
+        {
+            return Err(AkitaError::InvalidSetup(
+                "relation common alpha domain is invalid".into(),
+            ));
+        }
+        Ok(Self {
+            alpha_powers,
+            relation_coefficient_block_len,
+            physical_field_len,
+            relation_lane_weights: vec![E::zero(); lane_capacity],
+        })
+    }
+
+    pub(super) fn finish(self) -> Result<RelationWeightFactorization<E>, AkitaError> {
+        RelationWeightFactorization::new(
+            self.alpha_powers[..self.relation_coefficient_block_len].to_vec(),
+            self.relation_lane_weights,
+        )
+    }
+}
+
+impl<E: Field> RelationWeightTarget<E> for FactoredWeightSink<E> {
+    fn alpha_powers(&self) -> &[E] {
+        &self.alpha_powers
+    }
+
+    fn push(
+        &mut self,
+        physical_start: usize,
+        coefficient_count: usize,
+        alpha_exponent_start: usize,
+        scalar: E,
+        _contribution: RelationWeightContribution,
+    ) -> Result<(), AkitaError> {
+        // Preserve the public event builder's zero-contribution short circuit.
+        if scalar.is_zero() {
+            return Ok(());
+        }
+        let physical_end = physical_start
+            .checked_add(coefficient_count)
+            .ok_or_else(|| AkitaError::InvalidSetup("relation event address overflow".into()))?;
+        let alpha_exponent_end = alpha_exponent_start
+            .checked_add(coefficient_count)
+            .ok_or_else(|| AkitaError::InvalidSetup("relation alpha range overflow".into()))?;
+        let block = self.relation_coefficient_block_len;
+        if coefficient_count == 0
+            || !coefficient_count.is_power_of_two()
+            || !physical_start.is_multiple_of(block)
+            || !coefficient_count.is_multiple_of(block)
+            || !alpha_exponent_start.is_multiple_of(block)
+            || physical_end > self.physical_field_len
+            || alpha_exponent_end > self.alpha_powers.len()
+        {
+            return Err(AkitaError::InvalidSetup(
+                "relation event is unaligned or outside its checked domain".into(),
+            ));
+        }
+        for coefficient_offset in (0..coefficient_count).step_by(block) {
+            let lane = (physical_start + coefficient_offset) / block;
+            let alpha_power = self.alpha_powers[alpha_exponent_start + coefficient_offset];
+            // Overlapping constraint/setup/packing contributions remain additive.
+            self.relation_lane_weights[lane] += scalar * alpha_power;
+        }
+        Ok(())
+    }
+}

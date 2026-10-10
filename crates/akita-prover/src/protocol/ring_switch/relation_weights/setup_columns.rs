@@ -21,13 +21,13 @@ impl<F: Field> SetupRows<'_, F> {
     }
 }
 
-pub(super) fn contract_setup_columns<F, E>(
+pub(super) fn contract_setup_columns<F, E, V: AsRef<[E]>>(
     family: &SetupRows<'_, F>,
     columns: Range<usize>,
     row_weights: &[(usize, Vec<E>)],
     batch_count: usize,
     value_width: usize,
-    contract: impl Fn(&[F]) -> Result<Vec<E>, AkitaError> + Sync,
+    contract: impl Fn(&[F]) -> Result<V, AkitaError> + Sync,
 ) -> Result<SetupColumnValues<E>, AkitaError>
 where
     F: Field,
@@ -58,6 +58,7 @@ where
                 .ok_or_else(|| AkitaError::InvalidSetup("setup column offset overflow".into()))?;
             for (row, weights) in row_weights {
                 let contracted = contract(family.ring_slice(*row, column)?)?;
+                let contracted = contracted.as_ref();
                 if contracted.len() != value_width {
                     return Err(AkitaError::InvalidSetup(
                         "setup column contraction width mismatch".into(),
@@ -70,7 +71,7 @@ where
                     let destination = output
                         .get_mut(batch * value_width..(batch + 1) * value_width)
                         .ok_or(AkitaError::InvalidProof)?;
-                    for (accumulator, &value) in destination.iter_mut().zip(&contracted) {
+                    for (accumulator, &value) in destination.iter_mut().zip(contracted) {
                         *accumulator += weight * value;
                     }
                 }
