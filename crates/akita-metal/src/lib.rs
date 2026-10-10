@@ -52,6 +52,8 @@ mod packed_onehot_fp128_d512;
 #[cfg(target_os = "macos")]
 mod prepared;
 #[cfg(target_os = "macos")]
+mod recursive_commit;
+#[cfg(target_os = "macos")]
 mod ring_switch;
 #[cfg(target_os = "macos")]
 #[expect(

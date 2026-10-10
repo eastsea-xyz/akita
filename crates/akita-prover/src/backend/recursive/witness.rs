@@ -216,8 +216,13 @@ impl<'a, F: Field, const D: usize> SuffixWitnessView<'a, F, D> {
         self.padded_ring_elems
     }
 
+    /// Signed coefficients, including the physical commitment padding.
+    pub fn digits(&self) -> impl ExactSizeIterator<Item = i8> + '_ {
+        self.digits.iter()
+    }
+
     #[inline]
-    fn num_live_blocks(&self, num_positions_per_block: usize) -> Result<usize, AkitaError> {
+    pub fn num_live_blocks(&self, num_positions_per_block: usize) -> Result<usize, AkitaError> {
         if num_positions_per_block == 0 || self.digits.len() == 0 {
             return Err(AkitaError::InvalidInput(
                 "recursive witness requires positive exact block geometry".into(),

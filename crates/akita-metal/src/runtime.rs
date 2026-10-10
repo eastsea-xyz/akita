@@ -166,7 +166,7 @@ const FP128_D512_LINEAR_RELATION_RAW_PRIMES: [i32; FP128_D512_LINEAR_RELATION_NU
 ];
 const FP128_RECURSIVE_COMMIT_THREADS: usize = 512;
 const FP128_RECURSIVE_COMMIT_RECONSTRUCT_THREADS: usize = 256;
-const FP128_RECURSIVE_COMMIT_BLOCKS_PER_GROUP: usize = 16;
+pub(crate) const FP128_RECURSIVE_COMMIT_BLOCKS_PER_GROUP: usize = 16;
 const FP128_RECURSIVE_COMMIT_MAX_ROWS: usize = 8;
 
 fn pack_biased_subring64_challenges(dense_challenges: &[i8]) -> Result<Vec<u32>, MetalCommitError> {
