@@ -91,7 +91,13 @@ fn field_sparse_parity<const D: usize>() {
         )
         .into_flattened();
         let actual = runtime
-            .dispatch_recursive_sparse_fold(&[(RecursiveFoldSource::Field { buffer }, p, terms)])
+            .dispatch_recursive_sparse_fold(&[(
+                RecursiveFoldSource::Field {
+                    buffer: buffer.into(),
+                },
+                p,
+                terms,
+            )])
             .unwrap();
         assert_eq!(
             actual.centered_coefficients, expected,
@@ -211,7 +217,9 @@ fn recursive_field_evaluate_fold_uses_canonical_negacyclic_arithmetic() {
     let buffer = runtime.shared_buffer_from_slice(&fields).unwrap();
     let actual = runtime
         .dispatch_recursive_evaluate_fold(
-            &RecursiveFoldSource::Field { buffer },
+            &RecursiveFoldSource::Field {
+                buffer: buffer.into(),
+            },
             p,
             &terms(&positions),
             &terms(&folds),

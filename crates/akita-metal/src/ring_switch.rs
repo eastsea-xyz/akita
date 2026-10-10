@@ -137,7 +137,12 @@ impl<const D: usize> RingSwitchRelationKernel<RingSwitchRelationView<'_, D>, F, 
             metrics.allocation_bytes = metrics
                 .allocation_bytes
                 .saturating_add(outcome.allocation_bytes)
-                .saturating_add(matrix.bytes.saturating_mul(usize::from(!matrix.cache_hit)));
+                .saturating_add(
+                    matrix
+                        .buffer
+                        .allocation_bytes()
+                        .saturating_mul(usize::from(!matrix.cache_hit)),
+                );
         })
         .map_err(MetalCommitError::into_akita)?;
         tracing::debug!(
@@ -249,7 +254,12 @@ impl MetalBackend {
             metrics.allocation_bytes = metrics
                 .allocation_bytes
                 .saturating_add(outcome.allocation_bytes)
-                .saturating_add(matrix.bytes.saturating_mul(usize::from(!matrix.cache_hit)));
+                .saturating_add(
+                    matrix
+                        .buffer
+                        .allocation_bytes()
+                        .saturating_mul(usize::from(!matrix.cache_hit)),
+                );
         })
         .map_err(MetalCommitError::into_akita)?;
         // The same retained high product supplies B's cyclic rows. The

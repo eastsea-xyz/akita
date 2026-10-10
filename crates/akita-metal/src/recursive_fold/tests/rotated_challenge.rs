@@ -123,7 +123,7 @@ fn recursive_d64_live_field_multi_plane_rotated_duplicates_match_cpu() {
             let actual = runtime
                 .dispatch_recursive_sparse_fold(&[(
                     RecursiveFoldSource::Field {
-                        buffer: buffer.clone(),
+                        buffer: buffer.clone().into(),
                     },
                     p,
                     terms,

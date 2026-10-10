@@ -36,8 +36,12 @@ pub(crate) struct RecursiveSparseTerm {
 }
 
 pub(crate) enum RecursiveFoldSource {
-    Field { buffer: Buffer },
-    Packed { owner: Arc<[u8]> },
+    Field {
+        buffer: crate::prepared::MatrixBuffer,
+    },
+    Packed {
+        owner: Arc<[u8]>,
+    },
 }
 
 pub(crate) struct RecursivePackedCacheEntry {
@@ -179,7 +183,7 @@ impl MetalRuntime {
         &self,
         source: &RecursiveFoldSource,
         p: RecursiveFoldParams,
-    ) -> Result<(Buffer, usize), MetalCommitError> {
+    ) -> Result<(crate::prepared::MatrixBuffer, usize), MetalCommitError> {
         match source {
             RecursiveFoldSource::Field { buffer } => Ok((buffer.clone(), 0)),
             RecursiveFoldSource::Packed { owner } => {
@@ -192,7 +196,7 @@ impl MetalRuntime {
                         && entry.bit_width == p.bit_width
                         && entry.stored_coefficients == p.stored_coefficients
                 }) {
-                    return Ok((entry.buffer.clone(), 0));
+                    return Ok((entry.buffer.clone().into(), 0));
                 }
                 let payload_len =
                     usize::try_from((p.stored_coefficients * p.bit_width).div_ceil(8))
@@ -214,7 +218,7 @@ impl MetalRuntime {
                         buffer: buffer.clone(),
                     });
                 }
-                Ok((buffer, payload_len))
+                Ok((buffer.into(), payload_len))
             }
         }
     }

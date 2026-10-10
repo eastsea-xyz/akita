@@ -297,7 +297,9 @@ impl MetalBackend {
                     self.update_opening_metrics(|m| {
                         m.buffer_setup_time += matrix.prepare_time;
                         if !matrix.cache_hit {
-                            m.allocation_bytes = m.allocation_bytes.saturating_add(matrix.bytes);
+                            m.allocation_bytes = m
+                                .allocation_bytes
+                                .saturating_add(matrix.buffer.allocation_bytes());
                         }
                     })
                     .map_err(MetalCommitError::into_akita)?;
@@ -315,7 +317,7 @@ impl MetalBackend {
                             .saturating_add(std::mem::size_of_val(fields));
                     })
                     .map_err(MetalCommitError::into_akita)?;
-                    buffer
+                    buffer.into()
                 };
                 Ok(RecursiveFoldSource::Field { buffer })
             }

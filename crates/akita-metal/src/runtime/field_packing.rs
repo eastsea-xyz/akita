@@ -18,7 +18,7 @@ pub(crate) struct FieldCoefficientPackingParams {
 
 pub(crate) enum FieldPackingSource<'a> {
     Field {
-        buffer: Buffer,
+        buffer: crate::prepared::MatrixBuffer,
         coefficients: usize,
     },
     Packed {
@@ -27,6 +27,21 @@ pub(crate) enum FieldPackingSource<'a> {
         stored_coefficients: usize,
         live_coefficients: usize,
     },
+}
+
+enum FieldPackingBuffer<'a> {
+    Field(crate::prepared::MatrixBuffer),
+    Packed(SharedSliceBuffer<'a, u8>),
+}
+
+impl std::ops::Deref for FieldPackingBuffer<'_> {
+    type Target = Buffer;
+    fn deref(&self) -> &Buffer {
+        match self {
+            Self::Field(buffer) => buffer,
+            Self::Packed(shared) => &shared.buffer,
+        }
+    }
 }
 
 impl MetalRuntime {
@@ -145,7 +160,9 @@ impl MetalRuntime {
             let mut input_bytes = 0usize;
             for source in sources {
                 let input = match source {
-                    FieldPackingSource::Field { buffer, .. } => buffer.clone(),
+                    FieldPackingSource::Field { buffer, .. } => {
+                        FieldPackingBuffer::Field(buffer.clone())
+                    }
                     FieldPackingSource::Packed { bytes, .. } => {
                         let buffer = self.shared_slice_buffer(bytes)?;
                         if !buffer.zero_copy {
@@ -153,7 +170,7 @@ impl MetalRuntime {
                                 MetalCommitError::ShapeOverflow("field packing input allocation"),
                             )?;
                         }
-                        buffer.buffer
+                        FieldPackingBuffer::Packed(buffer)
                     }
                 };
                 inputs.push(input);

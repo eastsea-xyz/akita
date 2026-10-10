@@ -7,7 +7,6 @@ use akita_prover::backend::{
 };
 use akita_prover::compute::{CpuBackend, RootPolyMeta, SubringCoefficientPackingBatchKernel};
 use jolt_field::ExtField;
-use std::mem::size_of_val;
 
 fn recursive_packing_weights<E: ExtField<F>>(
     point: &PreparedSubringCoefficientPackingPoint<E>,
@@ -204,24 +203,26 @@ where
                         self.update_opening_metrics(|metrics| {
                             metrics.buffer_setup_time += matrix.prepare_time;
                             if !matrix.cache_hit {
-                                metrics.allocation_bytes =
-                                    metrics.allocation_bytes.saturating_add(matrix.bytes);
+                                metrics.allocation_bytes = metrics
+                                    .allocation_bytes
+                                    .saturating_add(matrix.buffer.allocation_bytes());
                             }
                         })
                         .map_err(MetalCommitError::into_akita)?;
                         matrix.buffer.as_ref().clone()
                     } else {
-                        let buffer = runtime
-                            .shared_slice_buffer(fields)
-                            .map_err(MetalCommitError::into_akita)?;
+                        let buffer = crate::prepared::MatrixBuffer::from_setup(
+                            runtime,
+                            expanded,
+                            0..fields.len(),
+                        )?;
                         self.update_opening_metrics(|metrics| {
-                            if !buffer.zero_copy {
-                                metrics.allocation_bytes =
-                                    metrics.allocation_bytes.saturating_add(size_of_val(fields));
-                            }
+                            metrics.allocation_bytes = metrics
+                                .allocation_bytes
+                                .saturating_add(buffer.allocation_bytes());
                         })
                         .map_err(MetalCommitError::into_akita)?;
-                        buffer.buffer
+                        buffer
                     };
                     inputs.push(FieldPackingSource::Field {
                         buffer,

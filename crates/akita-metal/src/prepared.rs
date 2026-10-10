@@ -11,6 +11,10 @@ use crate::field::{MetalField, F};
 use crate::runtime::{MetalRuntime, RecursiveCommitParams};
 use crate::MetalCommitError;
 
+#[path = "prepared/matrix_buffer.rs"]
+mod matrix_buffer;
+pub(crate) use matrix_buffer::MatrixBuffer;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct MatrixCacheKey {
     ring_d: usize,
@@ -19,12 +23,12 @@ struct MatrixCacheKey {
 }
 
 struct PreparedMatrix {
-    buffer: Arc<Buffer>,
+    buffer: Arc<MatrixBuffer>,
     bytes: usize,
 }
 
 pub(crate) struct MatrixPreparation {
-    pub(crate) buffer: Arc<Buffer>,
+    pub(crate) buffer: Arc<MatrixBuffer>,
     pub(crate) bytes: usize,
     pub(crate) cache_hit: bool,
     pub(crate) prepare_time: Duration,
@@ -34,7 +38,7 @@ pub(crate) struct MatrixPreparation {
 pub struct MetalPreparedSetup {
     pub(crate) cpu: CpuPreparedSetup<F>,
     pub(crate) expanded: Arc<AkitaExpandedSetup<F>>,
-    matrices: Mutex<HashMap<MatrixCacheKey, PreparedMatrix>>,
+    matrices: Mutex<Option<PreparedMatrix>>,
     recursive_matrices: Mutex<HashMap<MatrixCacheKey, PreparedMatrix>>,
     linear_matrices: Mutex<HashMap<MatrixCacheKey, PreparedMatrix>>,
 }
@@ -44,7 +48,7 @@ impl MetalPreparedSetup {
         Self {
             cpu,
             expanded,
-            matrices: Mutex::new(HashMap::new()),
+            matrices: Mutex::new(None),
             recursive_matrices: Mutex::new(HashMap::new()),
             linear_matrices: Mutex::new(HashMap::new()),
         }
@@ -73,27 +77,13 @@ impl MetalPreparedSetup {
         let required_bytes = field_count
             .checked_mul(size_of::<<F as MetalField>::DeviceElement>())
             .ok_or_else(|| MetalCommitError::ShapeOverflow("A matrix bytes").into_akita())?;
-        let key = MatrixCacheKey {
-            ring_d,
-            n_a,
-            active_a_cols,
-        };
         let mut matrices = self
             .matrices
             .lock()
             .map_err(|_| MetalCommitError::PoisonedLock.into_akita())?;
-        if let Some(prepared) = matrices.get(&key) {
-            return Ok(MatrixPreparation {
-                buffer: prepared.buffer.clone(),
-                bytes: prepared.bytes,
-                cache_hit: true,
-                prepare_time: Duration::ZERO,
-            });
-        }
         if let Some(prepared) = matrices
-            .values()
+            .as_ref()
             .filter(|prepared| prepared.bytes >= required_bytes)
-            .min_by_key(|prepared| prepared.bytes)
         {
             return Ok(MatrixPreparation {
                 buffer: prepared.buffer.clone(),
@@ -104,35 +94,21 @@ impl MetalPreparedSetup {
         }
 
         let start = Instant::now();
-        let fields = self
-            .expanded
-            .shared_matrix
-            .as_field_slice()
-            .get(..field_count)
-            .ok_or_else(|| {
-                AkitaError::InvalidSetup(
-                    "validated Metal A-matrix prefix is unexpectedly unavailable".into(),
-                )
-            })?;
-        let packed = fields
-            .iter()
-            .copied()
-            .map(F::into_device)
-            .collect::<Vec<_>>();
-        let bytes = size_of_val(packed.as_slice());
-        let buffer = Arc::new(
-            runtime
-                .private_buffer_from_slice(&packed)
-                .map_err(MetalCommitError::into_akita)?,
-        );
+        // F's fixed canonical storage matches Fp128Limbs. Borrow aligned storage
+        // with its setup owner, or keep exactly one shared copy for unaligned input.
+        let buffer = Arc::new(MatrixBuffer::from_setup(
+            runtime,
+            &self.expanded,
+            0..field_count,
+        )?);
+        let bytes = required_bytes;
         let prepare_time = start.elapsed();
-        matrices.insert(
-            key,
-            PreparedMatrix {
-                buffer: buffer.clone(),
-                bytes,
-            },
-        );
+        // A canonical flat prefix serves every smaller reshaped prefix. Replacing
+        // the cache drops obsolete references; escaped handles retain their owner.
+        *matrices = Some(PreparedMatrix {
+            buffer: buffer.clone(),
+            bytes,
+        });
         Ok(MatrixPreparation {
             buffer,
             bytes,
@@ -194,7 +170,7 @@ impl MetalPreparedSetup {
         let outcome = runtime
             .prepare_fp128_recursive_commit_matrix::<D>(&input.buffer, params)
             .map_err(MetalCommitError::into_akita)?;
-        let buffer = Arc::new(outcome.buffer);
+        let buffer = Arc::new(MatrixBuffer::from(outcome.buffer));
         let bytes = outcome.allocation_bytes;
         matrices.insert(
             key,
@@ -263,7 +239,7 @@ impl MetalPreparedSetup {
         let outcome = runtime
             .prepare_fp128_relation_rows_matrix::<D>(&input.buffer, matrix_rings)
             .map_err(MetalCommitError::into_akita)?;
-        let buffer = Arc::new(outcome.buffer);
+        let buffer = Arc::new(MatrixBuffer::from(outcome.buffer));
         let bytes = outcome.allocation_bytes;
         // A larger flat prefix subsumes every smaller spectrum at this D.
         // Existing borrowers retain Arc buffers until their synchronous work ends.
@@ -293,7 +269,7 @@ impl MetalPreparedSetup {
             .matrices
             .lock()
             .map_err(|_| MetalCommitError::PoisonedLock)?
-            .len();
+            .is_some();
         let recursive = self
             .recursive_matrices
             .lock()
@@ -304,11 +280,11 @@ impl MetalPreparedSetup {
             .lock()
             .map_err(|_| MetalCommitError::PoisonedLock)?
             .len();
-        checked::sum([canonical, recursive, linear])
+        checked::sum([usize::from(canonical), recursive, linear])
             .ok_or(MetalCommitError::ShapeOverflow("matrix cache entries"))
     }
 
-    /// Total bytes across independently allocated resident matrix prefixes.
+    /// Total logical resident bytes, including canonical no-copy views.
     pub fn matrix_cache_bytes(&self) -> Result<usize, MetalCommitError> {
         let canonical = self
             .matrices
@@ -324,7 +300,7 @@ impl MetalPreparedSetup {
             .map_err(|_| MetalCommitError::PoisonedLock)?;
         checked::sum(
             canonical
-                .values()
+                .iter()
                 .chain(recursive.values())
                 .chain(linear.values())
                 .map(|matrix| matrix.bytes),
@@ -365,3 +341,7 @@ mod tests {
         assert_eq!(prepared.matrix_cache_bytes().unwrap(), root.bytes);
     }
 }
+
+#[cfg(test)]
+#[path = "prepared/canonical_tests.rs"]
+mod canonical_tests;

@@ -55,7 +55,7 @@ fn field_packing_resident_batch_matches_component_major_reference() {
         let bytes = encode_digits(&digits, width);
         let sources = [
             FieldPackingSource::Field {
-                buffer: buffer.clone(),
+                buffer: buffer.clone().into(),
                 coefficients: fields.len(),
             },
             FieldPackingSource::Packed {
@@ -155,7 +155,7 @@ fn field_packing_rejects_invalid_batch_before_dispatch() {
     assert!(runtime
         .dispatch_fp128_field_coefficient_packing(
             &[FieldPackingSource::Field {
-                buffer: undersized,
+                buffer: undersized.into(),
                 coefficients: 128
             }],
             &weights,
