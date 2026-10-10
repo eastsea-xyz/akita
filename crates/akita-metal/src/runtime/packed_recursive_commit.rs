@@ -119,7 +119,7 @@ impl MetalRuntime {
                 // Reference inputs stay independent owned copies; no borrowed
                 // no-copy guard is lost when returning the owner wrapper.
                 Ok((
-                    self.shared_buffer_from_slice(*digits)?.into(),
+                    self.shared_buffer_from_slice(digits)?.into(),
                     size_of_val(*digits),
                 ))
             }
