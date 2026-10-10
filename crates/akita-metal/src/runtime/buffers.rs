@@ -1,4 +1,5 @@
 use super::*;
+use crate::field::MetalField;
 
 impl MetalRuntime {
     pub(crate) fn shared_buffer_from_slice<T>(
@@ -124,19 +125,27 @@ impl MetalRuntime {
         })
     }
 
-    pub(crate) fn private_buffer_from_slice<T>(
+    /// Encode directly into one owned CPU/GPU shared allocation.
+    pub(crate) fn shared_buffer_from_fields<T: MetalField>(
         &self,
         values: &[T],
     ) -> Result<Buffer, MetalCommitError> {
-        let bytes = size_of_val(values);
-        let staging = self.shared_buffer_from_slice(values)?;
-        let buffer = self.private_buffer(bytes)?;
-        let command = self.queue.new_command_buffer();
-        command.set_label("Akita immutable setup upload");
-        let encoder = command.new_blit_command_encoder();
-        encoder.copy_from_buffer(&staging, 0, &buffer, 0, bytes as u64);
-        encoder.end_encoding();
-        let _ = complete_command(command)?;
+        let bytes = values
+            .len()
+            .checked_mul(size_of::<T::DeviceElement>())
+            .ok_or(MetalCommitError::ShapeOverflow("field input bytes"))?;
+        let buffer = self.shared_buffer(bytes)?;
+        let destination = buffer.contents().cast::<T::DeviceElement>();
+        for (index, &value) in values.iter().enumerate() {
+            // SAFETY: `buffer` owns the checked byte length for all device
+            // elements, and each write initializes one disjoint element before
+            // the buffer is returned or submitted to a GPU command. Encoding
+            // uses MetalField rather than assuming the host field layout;
+            // unaligned writes avoid an additional host alignment requirement.
+            unsafe {
+                destination.add(index).write_unaligned(value.into_device());
+            }
+        }
         Ok(buffer)
     }
 

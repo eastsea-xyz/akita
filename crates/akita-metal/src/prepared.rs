@@ -110,17 +110,12 @@ impl MetalPreparedSetup {
                     "validated Metal A-matrix prefix is unexpectedly unavailable".into(),
                 )
             })?;
-        let packed = fields
-            .iter()
-            .copied()
-            .map(F::into_device)
-            .collect::<Vec<_>>();
-        let bytes = size_of_val(packed.as_slice());
         let buffer = Arc::new(
             runtime
-                .private_buffer_from_slice(&packed)
+                .shared_buffer_from_fields(fields)
                 .map_err(MetalCommitError::into_akita)?,
         );
+        let bytes = required_bytes;
         let prepare_time = start.elapsed();
         matrices.insert(
             key,
@@ -162,11 +157,94 @@ impl MetalPreparedSetup {
 
 #[cfg(test)]
 mod tests {
-    use akita_prover::{AkitaProverSetup, ComputeBackendSetup};
-    use akita_types::SetupMatrixCapacity;
+    use akita_prover::compute::{CommitInnerPlan, RootCommitKernel};
+    use akita_prover::{
+        AkitaProverSetup, ComputeBackendSetup, CpuBackend, OneHotPoly, RootCommitSource,
+    };
+    use akita_types::{FlatMatrix, SetupMatrixCapacity};
+    use jolt_field::CanonicalEncoding;
 
     use super::*;
+    use crate::field::Fp128Limbs;
     use crate::{MetalBackend, MetalExecutionPolicy};
+
+    #[test]
+    fn owned_shared_matrix_preserves_canonical_encoding_and_cpu_commitment() {
+        const D: usize = 64;
+        let plan = CommitInnerPlan {
+            n_a: 2,
+            num_positions_per_block: 2,
+            num_digits_inner: 1,
+            log_basis_inner: 3,
+        };
+        let field_count = plan.n_a * plan.num_positions_per_block * plan.num_digits_inner * D;
+        let boundaries = [
+            0,
+            1,
+            u128::from(u32::MAX),
+            u128::from(u64::MAX),
+            1u128 << 64,
+            0xffff_ffff_ffff_ffff_ffff_ffff_0000_5808,
+        ];
+        let fields = (0..field_count)
+            .map(|index| F::from_u128_checked(boundaries[index % boundaries.len()]).unwrap())
+            .collect::<Vec<_>>();
+        let mut setup = AkitaProverSetup::<F>::generate_with_capacity(
+            8,
+            1,
+            SetupMatrixCapacity {
+                num_field_elements: field_count,
+            },
+        )
+        .unwrap();
+        Arc::make_mut(&mut setup.expanded).shared_matrix =
+            FlatMatrix::from_flat_data(fields.clone());
+        let cpu = CpuBackend::DEFAULT;
+        let cpu_prepared = cpu.prepare_setup(&setup).unwrap();
+        let metal = MetalBackend::new(MetalExecutionPolicy::RequireMetal).unwrap();
+        let prepared = metal.prepare_setup(&setup).unwrap();
+        let matrix = prepared.matrix(metal.runtime().unwrap(), D, 2, 2).unwrap();
+
+        assert_eq!(matrix.buffer.storage_mode(), metal::MTLStorageMode::Shared);
+        assert_eq!(matrix.bytes, field_count * size_of::<Fp128Limbs>());
+        assert_eq!(matrix.buffer.length(), matrix.bytes as u64);
+        for (index, &field) in fields.iter().enumerate() {
+            // SAFETY: The owned shared buffer contains the fully initialized
+            // canonical device encoding of `field_count` field elements.
+            let encoded = unsafe {
+                matrix
+                    .buffer
+                    .contents()
+                    .cast::<Fp128Limbs>()
+                    .add(index)
+                    .read_unaligned()
+            };
+            assert_eq!(encoded, field.into_device());
+        }
+
+        let polynomial =
+            OneHotPoly::<F, u16>::new(64, vec![Some(0), Some(63), None, Some(32)]).unwrap();
+        let view =
+            || <OneHotPoly<F, u16> as RootCommitSource<F, D>>::commit_view(&polynomial).unwrap();
+        let expected = cpu
+            .commit_inner_group(&cpu_prepared, vec![view()], plan)
+            .unwrap();
+        let actual = metal
+            .commit_inner_group(&prepared, vec![view()], plan)
+            .unwrap();
+        assert_eq!(expected.len(), actual.len());
+        for (cpu, metal) in expected.iter().zip(&actual) {
+            assert_eq!(cpu.inner_rows, metal.inner_rows);
+        }
+        assert!(
+            metal
+                .last_commit_metrics()
+                .unwrap()
+                .unwrap()
+                .matrix_cache_hit
+        );
+        assert_eq!(prepared.matrix_cache_entries().unwrap(), 1);
+    }
 
     #[test]
     fn larger_resident_matrix_serves_a_smaller_reshaped_prefix() {
