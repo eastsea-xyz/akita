@@ -82,6 +82,8 @@ const FP128_D512_LINEAR_RELATION_RECONSTRUCT_KERNEL_NAME: &str =
 const FP128_RECURSIVE_COMMIT_MATRIX_NTT_KERNEL_NAME: &str =
     "akita_fp128_recursive_commit_matrix_ntt";
 const FP128_RECURSIVE_COMMIT_MATVEC_KERNEL_NAME: &str = "akita_fp128_recursive_commit_matvec";
+const FP128_RECURSIVE_COMMIT_D512_MATVEC_KERNEL_NAME: &str =
+    "akita_fp128_recursive_commit_d512_matvec";
 const FP128_RECURSIVE_COMMIT_RECONSTRUCT_KERNEL_NAME: &str =
     "akita_fp128_recursive_commit_reconstruct";
 const FP128_DIRECT_RANGE_INITIAL_KERNEL_NAME: &str = "akita_fp128_direct_range_initial_partials";
@@ -124,7 +126,9 @@ const KERNEL_SOURCE: &str = concat!(
     "\n",
     include_str!("kernels/field_packing.metal"),
     "\n",
-    include_str!("kernels/digit_tree.metal")
+    include_str!("kernels/digit_tree.metal"),
+    "\n",
+    include_str!("kernels/recursive_commit_d512.metal")
 );
 /// Largest D512 panel threadgroup; each GPU gets what its compiled pipeline
 /// allows (register pressure: 640 on M1 Max), rounded down to whole simdgroups.
@@ -1015,8 +1019,9 @@ pub(crate) struct MetalRuntime {
     fp128_d512_linear_relation_resources: D512LinearRelationResources,
     fp128_recursive_commit_matrix_ntt_pipeline: ComputePipelineState,
     fp128_recursive_commit_matvec_pipeline: ComputePipelineState,
+    fp128_recursive_commit_d512_matvec_pipeline: ComputePipelineState,
     fp128_recursive_commit_reconstruct_pipeline: ComputePipelineState,
-    fp128_recursive_commit_resources: [RecursiveCommitResources; 2],
+    fp128_recursive_commit_resources: [RecursiveCommitResources; 4],
     fp128_direct_range_initial_pipeline: ComputePipelineState,
     fp128_direct_range_compact_fold_pipeline: ComputePipelineState,
     fp128_direct_range_field_fold_pipeline: ComputePipelineState,
@@ -1063,6 +1068,8 @@ impl MetalRuntime {
         let fp128_recursive_commit_resources = [
             recursive_commit_resources(&device, 64),
             recursive_commit_resources(&device, 128),
+            recursive_commit_resources(&device, 256),
+            recursive_commit_resources(&device, 512),
         ];
         Ok(Self {
             digit_tree_library: library.clone(),
@@ -1135,6 +1142,9 @@ impl MetalRuntime {
             )?,
             fp128_recursive_commit_matvec_pipeline: pipeline(
                 FP128_RECURSIVE_COMMIT_MATVEC_KERNEL_NAME,
+            )?,
+            fp128_recursive_commit_d512_matvec_pipeline: pipeline(
+                FP128_RECURSIVE_COMMIT_D512_MATVEC_KERNEL_NAME,
             )?,
             fp128_recursive_commit_reconstruct_pipeline: pipeline(
                 FP128_RECURSIVE_COMMIT_RECONSTRUCT_KERNEL_NAME,

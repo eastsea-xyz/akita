@@ -8,10 +8,7 @@ use akita_types::{balanced_signed_digit_abs_bound, RingVec, MAX_I8_LOG_BASIS};
 use jolt_field::{One, Ring, Zero};
 
 use crate::field::F;
-use crate::runtime::{
-    RecursiveCommitParams, FP128_D512_LINEAR_RELATION_NUM_PRIMES,
-    FP128_RECURSIVE_COMMIT_BLOCKS_PER_GROUP,
-};
+use crate::runtime::{MetalRuntime, RecursiveCommitParams, FP128_D512_LINEAR_RELATION_NUM_PRIMES};
 use crate::{MetalBackend, MetalCommitError, MetalExecutionPolicy};
 
 // Dense advice commitments deliberately retain the CPU implementation at any
@@ -63,7 +60,7 @@ impl<const D: usize> RootCommitKernel<SuffixWitnessView<'_, F, D>, F, D> for Met
                 "invalid recursive commitment geometry".into(),
             ));
         }
-        if !matches!(D, 64 | 128)
+        if !matches!(D, 64 | 128 | 256 | 512)
             || plan.log_basis_inner > MAX_I8_LOG_BASIS
             || self.runtime().is_none()
         {
@@ -72,10 +69,12 @@ impl<const D: usize> RootCommitKernel<SuffixWitnessView<'_, F, D>, F, D> for Met
                     self.cpu_backend()
                         .commit_inner_group(&prepared.cpu, sources, plan)
                 }
-                MetalExecutionPolicy::RequireMetal => Err(MetalCommitError::UnsupportedShape(
-                    format!("recursive commitment requires Metal, D64/D128 and an i8 basis; D={D}"),
-                )
-                .into_akita()),
+                MetalExecutionPolicy::RequireMetal => {
+                    Err(MetalCommitError::UnsupportedShape(format!(
+                        "recursive commitment requires Metal, D64/D128/D256/D512 and an i8 basis; D={D}"
+                    ))
+                    .into_akita())
+                }
             };
         }
         let runtime = self
@@ -93,6 +92,7 @@ impl<const D: usize> RootCommitKernel<SuffixWitnessView<'_, F, D>, F, D> for Met
         } else {
             balanced_bound
         };
+        let blocks_per_group = MetalRuntime::recursive_commit_blocks_per_group::<D>();
         let mut parameters = Vec::with_capacity(sources.len());
         let mut supported = true;
         for source in &sources {
@@ -114,8 +114,8 @@ impl<const D: usize> RootCommitKernel<SuffixWitnessView<'_, F, D>, F, D> for Met
                 .ok_or_else(|| MetalCommitError::ShapeOverflow("recursive output").into_akita())?;
             parameters.push(RecursiveCommitParams {
                 num_blocks: blocks as u64,
-                blocks_per_group: FP128_RECURSIVE_COMMIT_BLOCKS_PER_GROUP as u64,
-                num_block_groups: blocks.div_ceil(FP128_RECURSIVE_COMMIT_BLOCKS_PER_GROUP) as u64,
+                blocks_per_group: blocks_per_group as u64,
+                num_block_groups: blocks.div_ceil(blocks_per_group) as u64,
                 num_rows: plan.n_a as u64,
                 num_cols: cols as u64,
                 ring_d: D as u64,
@@ -199,13 +199,13 @@ impl<const D: usize> RootCommitKernel<SuffixWitnessView<'_, F, D>, F, D> for Met
 
 #[cfg(test)]
 mod tests {
-    use jolt_field::Ring;
     use akita_prover::compute::{CommitInnerPlan, RootCommitKernel};
     use akita_prover::{
         AkitaProverSetup, ComputeBackendSetup, CpuBackend, DensePoly, RecursiveWitnessFlat,
         RootCommitSource, SuffixWitnessView,
     };
     use akita_types::SetupMatrixCapacity;
+    use jolt_field::Ring;
 
     use crate::field::F;
     use crate::{profiling, MetalBackend, MetalExecutionPolicy};
@@ -299,8 +299,20 @@ mod tests {
     }
 
     #[test]
+    fn recursive_commit_random_d512_matches_cpu_and_dispatches() {
+        assert_random_parity::<512>(1);
+        assert_random_parity::<512>(3);
+    }
+
+    #[test]
+    fn recursive_commit_random_d256_matches_cpu_and_dispatches() {
+        assert_random_parity::<256>(1);
+        assert_random_parity::<256>(3);
+    }
+
+    #[test]
     fn recursive_commit_unsupported_dimension_respects_policy() {
-        const D: usize = 256;
+        const D: usize = 1024;
         let plan = CommitInnerPlan {
             n_a: 1,
             num_positions_per_block: 2,

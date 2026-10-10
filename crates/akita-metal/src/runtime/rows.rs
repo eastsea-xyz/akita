@@ -342,6 +342,12 @@ impl MetalRuntime {
                 || params.num_primes != FP128_D512_LINEAR_RELATION_NUM_PRIMES as u64
                 || params.matrix_rings != expected_matrix_rings as u64
                 || matrix.length() < expected_matrix_bytes as u64
+                || !self.supports_fp128_recursive_commit::<D>(
+                    1,
+                    num_rows,
+                    num_cols,
+                    params.rhs_abs_bound,
+                )
             {
                 return Err(MetalCommitError::UnsupportedShape(
                     "fp128 recursive commitment matrix geometry is unsupported".into(),
@@ -434,9 +440,9 @@ impl MetalRuntime {
                 .ok_or(MetalCommitError::ShapeOverflow(
                     "recursive commit transformed matrix bytes",
                 ))?;
-            let expected_block_groups =
-                num_blocks.div_ceil(FP128_RECURSIVE_COMMIT_BLOCKS_PER_GROUP);
-            if params.blocks_per_group != FP128_RECURSIVE_COMMIT_BLOCKS_PER_GROUP as u64
+            let blocks_per_group = Self::recursive_commit_blocks_per_group::<D>();
+            let expected_block_groups = num_blocks.div_ceil(blocks_per_group);
+            if params.blocks_per_group != blocks_per_group as u64
                 || params.num_block_groups != expected_block_groups as u64
                 || params.ring_d != D as u64
                 || params.num_primes != FP128_D512_LINEAR_RELATION_NUM_PRIMES as u64
@@ -480,7 +486,11 @@ impl MetalRuntime {
             command.set_label("Akita fp128 recursive witness commitment");
             let encoder = command.new_compute_command_encoder();
             encoder.set_label("Akita recursive commitment exact matvec");
-            encoder.set_compute_pipeline_state(&self.fp128_recursive_commit_matvec_pipeline);
+            encoder.set_compute_pipeline_state(if matches!(D, 256 | 512) {
+                &self.fp128_recursive_commit_d512_matvec_pipeline
+            } else {
+                &self.fp128_recursive_commit_matvec_pipeline
+            });
             encoder.set_buffer(0, Some(&digit_buffer.buffer), 0);
             encoder.set_buffer(1, Some(matrix_ntt), 0);
             encoder.set_buffer(2, Some(&residues), 0);

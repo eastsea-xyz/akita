@@ -345,6 +345,16 @@ impl MetalRuntime {
             .find(|resources| resources.ring_d == ring_d)
     }
 
+    /// D256/D512 use a single shared spectrum per group; the smaller dimensions
+    /// retain the existing sixteen independent SIMD-owned blocks.
+    pub(crate) const fn recursive_commit_blocks_per_group<const D: usize>() -> usize {
+        if matches!(D, 256 | 512) {
+            1
+        } else {
+            FP128_RECURSIVE_COMMIT_BLOCKS_PER_GROUP
+        }
+    }
+
     pub(crate) fn supports_fp128_recursive_commit<const D: usize>(
         &self,
         num_blocks: usize,
@@ -352,7 +362,7 @@ impl MetalRuntime {
         num_cols: usize,
         rhs_abs_bound: u64,
     ) -> bool {
-        if !matches!(D, 64 | 128)
+        if !matches!(D, 64 | 128 | 256 | 512)
             || num_blocks == 0
             || num_rows == 0
             || num_rows > FP128_RECURSIVE_COMMIT_MAX_ROWS
@@ -387,6 +397,11 @@ impl MetalRuntime {
             .and_then(|count| count.checked_mul(D))
             .and_then(|count| count.checked_mul(size_of::<Fp128Limbs>()));
         let maximum = self.device.max_buffer_length();
+        let matvec_pipeline = if matches!(D, 256 | 512) {
+            &self.fp128_recursive_commit_d512_matvec_pipeline
+        } else {
+            &self.fp128_recursive_commit_matvec_pipeline
+        };
         [source_bytes, matrix_ntt_bytes, residue_bytes, output_bytes]
             .into_iter()
             .all(|bytes| bytes.is_some_and(|bytes| bytes != 0 && bytes as u64 <= maximum))
@@ -394,7 +409,7 @@ impl MetalRuntime {
                 .and_then(|count| count.checked_mul(FP128_D512_LINEAR_RELATION_NUM_PRIMES))
                 .is_some_and(|groups| groups <= u32::MAX as usize)
             && num_blocks
-                .div_ceil(FP128_RECURSIVE_COMMIT_BLOCKS_PER_GROUP)
+                .div_ceil(Self::recursive_commit_blocks_per_group::<D>())
                 .checked_mul(FP128_D512_LINEAR_RELATION_NUM_PRIMES)
                 .is_some_and(|groups| groups <= u32::MAX as usize)
             && output_bytes
@@ -406,9 +421,7 @@ impl MetalRuntime {
                 .fp128_recursive_commit_matrix_ntt_pipeline
                 .max_total_threads_per_threadgroup()
                 >= D as u64
-            && self
-                .fp128_recursive_commit_matvec_pipeline
-                .max_total_threads_per_threadgroup()
+            && matvec_pipeline.max_total_threads_per_threadgroup()
                 >= FP128_RECURSIVE_COMMIT_THREADS as u64
             && self
                 .fp128_recursive_commit_reconstruct_pipeline
