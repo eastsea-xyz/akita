@@ -36,6 +36,7 @@ mod relation_rows;
 mod relation_setup;
 mod resources;
 mod rows;
+mod witness_pack;
 pub(crate) use relation_rows::{RelationRowsInput, RelationRowsMode, RelationRowsParams};
 #[cfg(test)]
 mod tests;
@@ -137,7 +138,9 @@ const KERNEL_SOURCE: &str = concat!(
     "\n",
     include_str!("kernels/recursive_commit_d512.metal"),
     "\n",
-    include_str!("kernels/relation_rows.metal")
+    include_str!("kernels/relation_rows.metal"),
+    "\n",
+    include_str!("kernels/witness_pack.metal")
 );
 /// Largest D512 panel threadgroup; each GPU gets what its compiled pipeline
 /// allows (register pressure: 640 on M1 Max), rounded down to whole simdgroups.
@@ -1031,6 +1034,7 @@ pub(crate) struct MetalRuntime {
     fp128_relation_rows_rhs_ntt_pipeline: ComputePipelineState,
     fp128_relation_rows_matvec_inverse_pipeline: ComputePipelineState,
     fp128_relation_rows_reconstruct_pipeline: ComputePipelineState,
+    witness_pack_pipeline: ComputePipelineState,
     fp128_recursive_commit_matrix_ntt_pipeline: ComputePipelineState,
     fp128_recursive_commit_matvec_pipeline: ComputePipelineState,
     fp128_recursive_commit_d512_matvec_pipeline: ComputePipelineState,
@@ -1169,6 +1173,7 @@ impl MetalRuntime {
             fp128_relation_rows_reconstruct_pipeline: pipeline(
                 FP128_RELATION_ROWS_RECONSTRUCT_KERNEL_NAME,
             )?,
+            witness_pack_pipeline: pipeline("akita_centered_witness_z_pack")?,
             fp128_recursive_commit_matrix_ntt_pipeline: pipeline(
                 FP128_RECURSIVE_COMMIT_MATRIX_NTT_KERNEL_NAME,
             )?,

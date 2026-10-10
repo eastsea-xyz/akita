@@ -146,3 +146,100 @@ fn direct_digit_range_matches_cpu_for_basis_four() {
 fn direct_digit_range_matches_cpu_for_basis_eight() {
     assert_direct_range_matches_cpu(8);
 }
+
+#[test]
+fn centered_witness_z_gpu_matches_balanced_cpu_bytes_and_bounds() {
+    use akita_prover::compute::DigitRowsComputeBackend;
+    let backend = MetalBackend::new(MetalExecutionPolicy::RequireMetal).unwrap();
+    fn check<const D: usize>(backend: &MetalBackend, state: &mut u64) {
+        for basis in 1u32..=8 {
+            let maximum_planes = ((128 + basis) / basis) as usize;
+            for planes in [0, 1, 32u32.div_ceil(basis) as usize + 1, maximum_planes] {
+                for rows in [0, 1, 3] {
+                    let centered = (0..rows * D)
+                        .map(|index| {
+                            *state ^= *state << 13;
+                            *state ^= *state >> 7;
+                            *state ^= *state << 17;
+                            match index % 13 {
+                                0 => i32::MIN,
+                                1 => i32::MAX,
+                                2 => 0,
+                                3 => -(1i32 << (basis - 1)),
+                                4 => (1i32 << (basis - 1)) - 1,
+                                _ => *state as i32,
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    let mut digits = vec![0i8; rows * planes * D];
+                    for row in 0..rows {
+                        for coefficient in 0..D {
+                            let mut value = centered[row * D + coefficient] as i128;
+                            for plane in 0..planes {
+                                let base = 1i128 << basis;
+                                let raw = value & (base - 1);
+                                let digit = if raw >= base / 2 { raw - base } else { raw };
+                                digits[(row * planes + plane) * D + coefficient] = digit as i8;
+                                value = (value - digit) >> basis;
+                            }
+                        }
+                    }
+                    for width in [basis as u8, 8] {
+                        let mut bytes = vec![0u8; (digits.len() * usize::from(width)).div_ceil(8)];
+                        let mut negative_abs_max = 0;
+                        let mut positive_max = 0;
+                        for (index, &digit) in digits.iter().enumerate() {
+                            negative_abs_max = negative_abs_max.max(if digit < 0 {
+                                digit.unsigned_abs()
+                            } else {
+                                0
+                            });
+                            positive_max =
+                                positive_max.max(if digit > 0 { digit as u8 } else { 0 });
+                            let raw = (digit as u8) & (u8::MAX >> (8 - width));
+                            for bit in 0..usize::from(width) {
+                                let position = index * usize::from(width) + bit;
+                                bytes[position / 8] |= ((raw >> bit) & 1) << (position % 8);
+                            }
+                        }
+                        let got = <MetalBackend as DigitRowsComputeBackend<F>>::pack_centered_witness_z::<D>(
+                            backend, &centered, planes, basis, width,
+                        ).unwrap().expect("RequireMetal must execute admitted witness packing");
+                        assert_eq!(
+                            got.bytes, bytes,
+                            "D={D}, basis={basis}, planes={planes}, rows={rows}, width={width}"
+                        );
+                        assert_eq!(got.digit_len, digits.len());
+                        assert_eq!(
+                            (got.negative_abs_max, got.positive_max),
+                            (negative_abs_max, positive_max)
+                        );
+                    }
+                }
+            }
+        }
+    }
+    let mut state = 0x5e31_6a17_42cb_805d;
+    check::<64>(&backend, &mut state);
+    check::<128>(&backend, &mut state);
+    check::<256>(&backend, &mut state);
+    check::<512>(&backend, &mut state);
+    for (planes, basis, width, len) in [
+        (1, 0, 3, 64),
+        (1, 9, 8, 64),
+        (1, 4, 3, 64),
+        (46, 3, 3, 64),
+        (1, 3, 3, 63),
+    ] {
+        assert!(
+            <MetalBackend as DigitRowsComputeBackend<F>>::pack_centered_witness_z::<64>(
+                &backend,
+                &vec![0; len],
+                planes,
+                basis,
+                width,
+            )
+            .is_err()
+        );
+    }
+}

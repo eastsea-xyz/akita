@@ -64,6 +64,8 @@ mod ring_switch;
     reason = "runtime retains unported operation routes; dispatch methods bind each kernel ABI"
 )]
 mod runtime;
+#[cfg(target_os = "macos")]
+mod witness_pack;
 
 #[cfg(target_os = "macos")]
 pub use backend::{MetalBackend, MetalCommitMetrics, MetalOpeningMetrics};

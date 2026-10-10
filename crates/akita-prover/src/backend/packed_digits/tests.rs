@@ -310,3 +310,67 @@ fn decode_microbenchmark() {
         );
     }
 }
+
+#[test]
+fn encoded_segments_preserve_boundaries_and_mixed_cpu_staging() {
+    let mut rng = StdRng::seed_from_u64(0xe17c_0ded);
+    for width in 1..=8 {
+        for start in 0..17 {
+            for len in [0, 1, 2, 7, 8, 63, 64, 65, 129] {
+                let prefix = random_digits(&mut rng, start, width);
+                let segment = random_digits(&mut rng, len, width);
+                let suffix = random_digits(&mut rng, 137, width);
+                let encoded = PackedSignedDigits::from_i8_digits(segment.clone(), width).unwrap();
+                let bounds = encoded.bounds();
+                let mut writer = PackedSignedDigitWriter::new_with_staging_limit(
+                    start + len + suffix.len(),
+                    width,
+                    64,
+                )
+                .unwrap();
+                assert_eq!(writer.bit_width(), width);
+                writer.write_at(0, &prefix).unwrap();
+                writer
+                    .write_at_encoded(
+                        start,
+                        len,
+                        encoded.encoded_bytes(),
+                        bounds.negative_abs_max(),
+                        bounds.positive_max(),
+                    )
+                    .unwrap();
+                writer.write_at_bulk(start + len, &suffix).unwrap();
+                let mut expected = prefix;
+                expected.extend(segment);
+                expected.extend(suffix);
+                let got = writer.finish().unwrap();
+                let expected = PackedSignedDigits::from_i8_digits(expected, width).unwrap();
+                assert_eq!(got, expected, "width={width}, start={start}, len={len}");
+            }
+        }
+    }
+}
+
+#[test]
+fn encoded_segments_validate_extent_padding_and_order_before_mutation() {
+    let mut writer = PackedSignedDigitWriter::new(128, 3).unwrap();
+    writer.write_at(0, &[1, -1]).unwrap();
+    for (start, len, bytes, negative, positive) in [
+        (1, 1, vec![0], 0, 0),
+        (127, 2, vec![0], 0, 0),
+        (2, 3, vec![0], 0, 0),
+        (2, 1, vec![0xf8], 0, 0),
+        (2, 1, vec![0], 5, 0),
+        (2, 1, vec![0], 0, 4),
+        (usize::MAX, 1, vec![0], 0, 0),
+    ] {
+        assert!(writer
+            .write_at_encoded(start, len, &bytes, negative, positive)
+            .is_err());
+        assert_eq!(writer.position(), 2);
+    }
+    writer.write_at_encoded(7, 2, &[0x17], 1, 2).unwrap();
+    writer.write_at(9, &[-2]).unwrap();
+    let packed = writer.finish().unwrap();
+    assert_eq!(&packed.decode()[..10], &[1, -1, 0, 0, 0, 0, 0, -1, 2, -2]);
+}

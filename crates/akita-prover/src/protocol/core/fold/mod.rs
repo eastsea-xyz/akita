@@ -417,7 +417,7 @@ where
         + crate::DirectDigitRangeProofBackend<F, E>
         + crate::DirectRelationRangeProofBackend<F, E>,
     TS: ComputeBackendSetup<F>,
-    R: RuntimeRingSwitchProveBackend<F> + ComputeBackendSetup<F> + 'stack,
+    R: RuntimeRingSwitchProveBackend<F> + DigitRowsComputeBackend<F> + 'stack,
     <C as ComputeBackendSetup<F>>::PreparedSetup: 'stack,
     <R as ComputeBackendSetup<F>>::PreparedSetup: 'stack,
     Cfg: CommitmentConfig<Field = F, ExtField = E>,

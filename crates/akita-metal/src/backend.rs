@@ -1257,6 +1257,22 @@ impl CompressionComputeBackend<F> for MetalBackend {
 }
 
 impl DigitRowsComputeBackend<F> for MetalBackend {
+    fn pack_centered_witness_z<const D: usize>(
+        &self,
+        centered: &[i32],
+        fold_planes: usize,
+        log_basis: u32,
+        bit_width: u8,
+    ) -> Result<Option<akita_prover::compute::PackedWitnessZ>, AkitaError> {
+        MetalBackend::pack_centered_witness_z::<D>(
+            self,
+            centered,
+            fold_planes,
+            log_basis,
+            bit_width,
+        )
+    }
+
     fn digit_rows<const D: usize>(
         &self,
         prepared: &Self::PreparedSetup,
