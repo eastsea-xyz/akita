@@ -3,13 +3,14 @@ use std::time::Instant;
 
 use akita_error::AkitaError;
 use akita_prover::protocol::sumcheck::digit_range::{
-    ClassIndexedDigitTreeFactory, ClassIndexedDigitTreeInput, ClassIndexedDigitTreeRound,
-    ClassIndexedDigitTreeSession,
+    ClassIndexedDigitTreeCompactSecondRoundInput, ClassIndexedDigitTreeCompactSourceInput,
+    ClassIndexedDigitTreeCompactStageInput, ClassIndexedDigitTreeFactory,
+    ClassIndexedDigitTreeInput, ClassIndexedDigitTreeRound, ClassIndexedDigitTreeSession,
 };
 use jolt_field::{One, Zero};
 
 use crate::field::{Fp128Limbs, F};
-use crate::runtime::digit_tree::{DigitTreePipelines, DigitTreeSession};
+use crate::runtime::digit_tree::{CompactDigitTreeSource, DigitTreePipelines, DigitTreeSession};
 use crate::runtime::DispatchTimings;
 use crate::{MetalBackend, MetalCommitError, MetalExecutionPolicy};
 
@@ -17,6 +18,7 @@ struct MetalDigitTreeFactory {
     backend: MetalBackend,
     pipelines: Arc<DigitTreePipelines>,
     max_domain_len: usize,
+    compact_source: std::sync::Mutex<Option<Arc<CompactDigitTreeSource>>>,
 }
 
 struct MetalDigitTreeSession {
@@ -55,6 +57,7 @@ impl MetalBackend {
             backend: self.clone(),
             pipelines,
             max_domain_len: maximum_rows,
+            compact_source: std::sync::Mutex::new(None),
         })))
     }
 
@@ -69,11 +72,11 @@ impl MetalBackend {
     }
 }
 
-impl ClassIndexedDigitTreeFactory<F> for MetalDigitTreeFactory {
-    fn start(
+impl MetalDigitTreeFactory {
+    fn begin_stage(
         &self,
         input: ClassIndexedDigitTreeInput<'_, F>,
-    ) -> Result<Box<dyn ClassIndexedDigitTreeSession<F>>, AkitaError> {
+    ) -> Result<MetalDigitTreeSession, AkitaError> {
         if input.domain_len > self.max_domain_len {
             return Err(AkitaError::InvalidInput(
                 "digit-tree table exceeds admitted domain".into(),
@@ -155,15 +158,118 @@ impl ClassIndexedDigitTreeFactory<F> for MetalDigitTreeFactory {
                     .saturating_add(resident.allocation_bytes);
             })
             .map_err(MetalCommitError::into_akita)?;
-        Ok(Box::new(MetalDigitTreeSession {
+        Ok(MetalDigitTreeSession {
             backend: self.backend.clone(),
             resident,
             padding_polynomial,
-        }))
+        })
+    }
+}
+
+impl ClassIndexedDigitTreeFactory<F> for MetalDigitTreeFactory {
+    fn start(
+        &self,
+        input: ClassIndexedDigitTreeInput<'_, F>,
+    ) -> Result<Box<dyn ClassIndexedDigitTreeSession<F>>, AkitaError> {
+        Ok(Box::new(self.begin_stage(input)?))
+    }
+
+    fn prepare_compact_source(
+        &self,
+        input: ClassIndexedDigitTreeCompactSourceInput<'_>,
+    ) -> Result<(), AkitaError> {
+        if input.domain_len == 4 {
+            // This tree stays on the existing compact CPU path: a quarter domain has one row.
+            *self
+                .compact_source
+                .lock()
+                .map_err(|_| MetalCommitError::PoisonedLock.into_akita())? = None;
+            return Ok(());
+        }
+        if input.domain_len / 4 > self.max_domain_len {
+            return Err(AkitaError::InvalidProof);
+        }
+        let runtime = self
+            .backend
+            .runtime()
+            .ok_or_else(|| MetalCommitError::DeviceUnavailable.into_akita())?;
+        let setup = Instant::now();
+        let source = runtime
+            .prepare_compact_digit_tree_source(input)
+            .map_err(MetalCommitError::into_akita)?;
+        self.backend
+            .update_opening_metrics(|metrics| {
+                metrics.buffer_setup_time += setup.elapsed();
+                metrics.allocation_bytes = metrics
+                    .allocation_bytes
+                    .saturating_add(source.allocation_bytes);
+            })
+            .map_err(MetalCommitError::into_akita)?;
+        *self
+            .compact_source
+            .lock()
+            .map_err(|_| MetalCommitError::PoisonedLock.into_akita())? = Some(Arc::new(source));
+        Ok(())
+    }
+
+    fn start_compact(
+        &self,
+        input: ClassIndexedDigitTreeCompactStageInput<'_, F>,
+    ) -> Result<Option<Box<dyn ClassIndexedDigitTreeSession<F>>>, AkitaError> {
+        let Some(source) = self
+            .compact_source
+            .lock()
+            .map_err(|_| MetalCommitError::PoisonedLock.into_akita())?
+            .clone()
+        else {
+            return Ok(None);
+        };
+        let mut stage = self.begin_stage(ClassIndexedDigitTreeInput {
+            domain_len: source.domain_len / 4,
+            explicit: &[],
+            padding: input.padding,
+            round: input.round,
+        })?;
+        let runtime = self
+            .backend
+            .runtime()
+            .ok_or_else(|| MetalCommitError::DeviceUnavailable.into_akita())?;
+        let setup = Instant::now();
+        let extra = runtime
+            .attach_compact_digit_tree(&mut stage.resident, source, input.pair_coefficients)
+            .map_err(MetalCommitError::into_akita)?;
+        self.backend
+            .update_opening_metrics(|metrics| {
+                metrics.buffer_setup_time += setup.elapsed();
+                metrics.allocation_bytes = metrics.allocation_bytes.saturating_add(extra);
+            })
+            .map_err(MetalCommitError::into_akita)?;
+        Ok(Some(Box::new(stage)))
     }
 }
 
 impl ClassIndexedDigitTreeSession<F> for MetalDigitTreeSession {
+    fn prepare_compact_second_round(
+        &mut self,
+        input: ClassIndexedDigitTreeCompactSecondRoundInput<'_, F>,
+    ) -> Result<(), AkitaError> {
+        let setup = Instant::now();
+        let runtime = self
+            .backend
+            .runtime()
+            .ok_or_else(|| MetalCommitError::DeviceUnavailable.into_akita())?;
+        let extra = runtime
+            .prepare_compact_digit_tree_second_round(&mut self.resident, input)
+            .map_err(MetalCommitError::into_akita)?;
+        self.backend
+            .update_opening_metrics(|metrics| {
+                metrics.buffer_setup_time += setup.elapsed();
+                metrics.allocation_bytes = metrics.allocation_bytes.saturating_add(extra);
+            })
+            .map_err(MetalCommitError::into_akita)?;
+        Ok(())
+    }
+
     fn round_coefficients(
         &mut self,
         equality_first: &[F],
@@ -228,3 +334,6 @@ impl ClassIndexedDigitTreeSession<F> for MetalDigitTreeSession {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod compact_tests;

@@ -1,6 +1,9 @@
 use super::exact_prefix::ExactPrefixTable;
 use super::exact_prefix::SplitEqualitySuffixMass;
-use super::rounds::{ClassIndexedDigitTreeFactory, ClassIndexedDigitTreeSession};
+use super::rounds::{
+    ClassIndexedDigitTreeCompactSecondRoundInput, ClassIndexedDigitTreeFactory,
+    ClassIndexedDigitTreeSession,
+};
 use akita_algebra::split_eq::GruenSplitEq;
 use akita_error::AkitaError;
 use akita_sumcheck::{EqFactoredSumcheckInstanceProver, EqFactoredUniPoly};
@@ -22,6 +25,7 @@ pub(super) struct ResidentDigitTreeState<E: Field> {
     pub(super) lanes: usize,
     pub(super) next_round: usize,
     pub(super) final_value: Option<Vec<E>>,
+    pub(super) compact_luts: Option<Box<CompactDigitTreeLutBuilder<E>>>,
 }
 
 /// The CPU stage owns compact early rounds. Promotion consumes it and drops
@@ -29,6 +33,14 @@ pub(super) struct ResidentDigitTreeState<E: Field> {
 pub(super) trait ClassIndexedHostStage<E: Field>:
     EqFactoredSumcheckInstanceProver<E> + Sized
 {
+    fn start_compact(
+        &self,
+        factory: &dyn ClassIndexedDigitTreeFactory<E>,
+    ) -> Result<Option<Box<dyn ClassIndexedDigitTreeSession<E>>>, AkitaError>;
+    fn into_compact(
+        self,
+        session: Box<dyn ClassIndexedDigitTreeSession<E>>,
+    ) -> Result<ResidentDigitTreeState<E>, AkitaError>;
     fn can_start_resident(&self) -> bool;
     fn into_resident(
         self,
@@ -53,14 +65,28 @@ pub(super) struct ClassIndexedDigitTreeProver<P, E: Field> {
 }
 
 impl<P: ClassIndexedHostStage<E>, E: Field> ClassIndexedDigitTreeProver<P, E> {
-    pub(super) fn new(stage: P, factory: Option<Arc<dyn ClassIndexedDigitTreeFactory<E>>>) -> Self {
-        Self {
-            num_rounds: EqFactoredSumcheckInstanceProver::num_rounds(&stage),
-            degree_bound: EqFactoredSumcheckInstanceProver::degree_bound(&stage),
-            input_claim: EqFactoredSumcheckInstanceProver::input_claim(&stage),
-            state: DigitTreeState::Host(stage),
+    pub(super) fn new(
+        stage: P,
+        factory: Option<Arc<dyn ClassIndexedDigitTreeFactory<E>>>,
+    ) -> Result<Self, AkitaError> {
+        let num_rounds = stage.num_rounds();
+        let degree_bound = stage.degree_bound();
+        let input_claim = stage.input_claim();
+        let compact = match &factory {
+            Some(factory) => stage.start_compact(factory.as_ref())?,
+            None => None,
+        };
+        let state = match compact {
+            Some(session) => DigitTreeState::Resident(stage.into_compact(session)?),
+            None => DigitTreeState::Host(stage),
+        };
+        Ok(Self {
+            num_rounds,
+            degree_bound,
+            input_claim,
+            state,
             factory,
-        }
+        })
     }
 
     pub(super) fn final_values(&self) -> Result<Vec<E>, AkitaError> {
@@ -141,6 +167,15 @@ impl<P: ClassIndexedHostStage<E>, E: Field> EqFactoredSumcheckInstanceProver<E>
                     return Err(AkitaError::InvalidProof);
                 }
                 let final_value = state.session.ingest_challenge(challenge)?;
+                if let Some(builder) = state.compact_luts.take() {
+                    let luts = (builder.prepare)(&builder, challenge);
+                    state.session.prepare_compact_second_round(
+                        ClassIndexedDigitTreeCompactSecondRoundInput {
+                            folded_pairs: &luts.folded_pairs,
+                            quartet_coefficients: luts.quartet_coefficients.as_deref(),
+                        },
+                    )?;
+                }
                 let next_domain_len = state.domain_len / 2;
                 if next_domain_len == 1 {
                     let values = final_value.ok_or(AkitaError::InvalidProof)?;
@@ -171,4 +206,18 @@ impl<Compact, FirstChallengeFolded, Row: Copy>
             Self::Compact(_) | Self::FirstChallengeFolded(_) => None,
         }
     }
+}
+
+/// Bounded CPU lookup preparation using the existing class-table arithmetic.
+pub(super) struct CompactDigitTreeLutBuilder<E: Field> {
+    pub(super) nodes: Vec<E>,
+    pub(super) coefficients: Vec<E>,
+    pub(super) arity: usize,
+    pub(super) class_count: usize,
+    pub(super) prepare: fn(&Self, E) -> CompactDigitTreeSecondRoundLuts<E>,
+}
+
+pub(super) struct CompactDigitTreeSecondRoundLuts<E: Field> {
+    pub(super) folded_pairs: Vec<E>,
+    pub(super) quartet_coefficients: Option<Vec<[E; 5]>>,
 }

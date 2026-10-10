@@ -26,8 +26,9 @@ mod rounds;
 
 pub use direct_range_leaf::LowBasisRangeCheckProver;
 pub use rounds::{
-    ClassIndexedDigitTreeFactory, ClassIndexedDigitTreeInput, ClassIndexedDigitTreeRound,
-    ClassIndexedDigitTreeSession,
+    ClassIndexedDigitTreeCompactSecondRoundInput, ClassIndexedDigitTreeCompactSourceInput,
+    ClassIndexedDigitTreeCompactStageInput, ClassIndexedDigitTreeFactory,
+    ClassIndexedDigitTreeInput, ClassIndexedDigitTreeRound, ClassIndexedDigitTreeSession,
 };
 
 use crate::backend::packed_digits::PackedSignedDigits;
@@ -273,7 +274,7 @@ where
         input.equality_point,
         input.input_claim,
     )?;
-    let mut stage = ClassIndexedDigitTreeProver::new(stage, factory);
+    let mut stage = ClassIndexedDigitTreeProver::new(stage, factory)?;
     let mut round = 0u32;
     let (sumcheck_proof, next_equality_point, _final_claim) =
         stage.prove::<F, T, _>(transcript, |transcript| {
@@ -651,6 +652,15 @@ impl<E: Field + Ring + Unreduced + Fold + AkitaSerialize> DigitRangeProver<E> {
             digit_source.prepare_class_indexed_leaf();
         }
 
+        if let Some(factory) = &factory {
+            factory.prepare_compact_source(ClassIndexedDigitTreeCompactSourceInput {
+                domain_len: digit_source.domain_len(),
+                live_len: digit_source.live_len(),
+                class_count: digit_source.class_count(),
+                ordered_pairs: digit_source.ordered_pairs(),
+            })?;
+        }
+
         let prefix = prove_product_prefix::<F, E, T>(
             digit_source,
             plan,
@@ -694,7 +704,7 @@ impl<E: Field + Ring + Unreduced + Fold + AkitaSerialize> DigitRangeProver<E> {
             prefix.claim,
             batched_leaf_coeffs,
         )?;
-        let mut leaf_stage = ClassIndexedDigitTreeProver::new(leaf_stage, factory);
+        let mut leaf_stage = ClassIndexedDigitTreeProver::new(leaf_stage, factory)?;
         let stage = u32::try_from(prefix.stage_proofs.len())
             .map_err(|_| AkitaError::InvalidSetup("Stage 1 index exceeds u32".into()))?;
         let mut round = 0u32;

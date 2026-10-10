@@ -1,8 +1,11 @@
 //! Class-indexed product-subcheck prover and specialized coefficient kernels.
 
 use super::class_indexed_state::ClassIndexedTableState;
-use super::class_indexed_state::{ClassIndexedHostStage, ResidentDigitTreeState};
-use super::compact_digit_source::CompactDigitSource;
+use super::class_indexed_state::{
+    ClassIndexedHostStage, CompactDigitTreeLutBuilder, CompactDigitTreeSecondRoundLuts,
+    ResidentDigitTreeState,
+};
+use super::compact_digit_source::{CompactDigitSource, RangeImageClass};
 use super::exact_prefix::ExactPrefixTable;
 use super::range_class_tables::{
     product_coefficients, FoldedProductPairTable, OrderedProductPairCoefficients, ProductNodeTable,
@@ -10,7 +13,8 @@ use super::range_class_tables::{
 };
 use super::round_accumulation::accumulate_equality_weighted_round;
 use super::rounds::{
-    ClassIndexedDigitTreeFactory, ClassIndexedDigitTreeInput, ClassIndexedDigitTreeRound,
+    ClassIndexedDigitTreeCompactStageInput, ClassIndexedDigitTreeFactory,
+    ClassIndexedDigitTreeInput, ClassIndexedDigitTreeRound, ClassIndexedDigitTreeSession,
 };
 use super::{MAX_QUARTET_TABLE_CLASS_COUNT, MAX_TREE_STAGE_Q_DEGREE};
 use akita_algebra::split_eq::GruenSplitEq;
@@ -419,6 +423,60 @@ impl<E: Field + Ring + Fold + Unreduced, const LANES: usize> EqFactoredSumcheckI
 impl<E: Field + Ring + Fold + Unreduced, const LANES: usize> ClassIndexedHostStage<E>
     for ClassIndexedProductSubcheckProver<E, LANES>
 {
+    fn start_compact(
+        &self,
+        factory: &dyn ClassIndexedDigitTreeFactory<E>,
+    ) -> Result<Option<Box<dyn ClassIndexedDigitTreeSession<E>>>, AkitaError> {
+        let ProductTableState::Compact(compact) = &self.product_table else {
+            return Ok(None);
+        };
+        if compact.source.quartet_count() < 4_096 {
+            return Ok(None);
+        }
+        let padding = compact.nodes.row(RangeImageClass::PADDING);
+        factory.start_compact(ClassIndexedDigitTreeCompactStageInput {
+            pair_coefficients: compact.pair_coefficients.rows(),
+            padding: &padding,
+            round: ClassIndexedDigitTreeRound::Product {
+                arity: self.arity,
+                parent_weights: self.parent_weights.clone(),
+            },
+        })
+    }
+
+    fn into_compact(
+        self,
+        session: Box<dyn ClassIndexedDigitTreeSession<E>>,
+    ) -> Result<ResidentDigitTreeState<E>, AkitaError> {
+        let Self {
+            product_table,
+            parent_weights,
+            split_eq,
+            arity,
+            ..
+        } = self;
+        let ProductTableState::Compact(compact) = product_table else {
+            return Err(AkitaError::InvalidProof);
+        };
+        let class_count = compact.source.class_count();
+        Ok(ResidentDigitTreeState {
+            session,
+            split_eq,
+            explicit_len: compact.source.live_len(),
+            domain_len: compact.source.domain_len(),
+            lanes: LANES,
+            next_round: 0,
+            final_value: None,
+            compact_luts: Some(Box::new(CompactDigitTreeLutBuilder {
+                nodes: compact.nodes.into_rows().into_iter().flatten().collect(),
+                coefficients: parent_weights,
+                arity,
+                class_count,
+                prepare: prepare_product_compact_luts::<E, LANES>,
+            })),
+        })
+    }
+
     fn can_start_resident(&self) -> bool {
         self.rounds_completed == 2
             && matches!(&self.product_table, ProductTableState::Materialized(table) if table.explicit_len() >= 4_096 && table.domain_len() >= 2)
@@ -457,6 +515,7 @@ impl<E: Field + Ring + Fold + Unreduced, const LANES: usize> ClassIndexedHostSta
             lanes: LANES,
             next_round: rounds_completed,
             final_value: None,
+            compact_luts: None,
         })
     }
 
@@ -465,5 +524,27 @@ impl<E: Field + Ring + Fold + Unreduced, const LANES: usize> ClassIndexedHostSta
             .final_value()
             .ok_or(AkitaError::InvalidProof)?;
         Ok(self.final_child_claims())
+    }
+}
+
+fn prepare_product_compact_luts<E: Field + Ring + Fold, const LANES: usize>(
+    input: &CompactDigitTreeLutBuilder<E>,
+    challenge: E,
+) -> CompactDigitTreeSecondRoundLuts<E> {
+    let rows = input
+        .nodes
+        .chunks_exact(LANES)
+        .map(|row| std::array::from_fn(|lane| row[lane]))
+        .collect();
+    let nodes = ProductNodeTable::<E, LANES>::from_rows(rows);
+    let folded = FoldedProductPairTable::new(&nodes, challenge);
+    let quartet_coefficients = (input.class_count == MAX_QUARTET_TABLE_CLASS_COUNT).then(|| {
+        SecondRoundProductQuartetCoefficients::new(&folded, input.arity, &input.coefficients)
+            .rows()
+            .to_vec()
+    });
+    CompactDigitTreeSecondRoundLuts {
+        folded_pairs: folded.rows().as_flattened().to_vec(),
+        quartet_coefficients,
     }
 }

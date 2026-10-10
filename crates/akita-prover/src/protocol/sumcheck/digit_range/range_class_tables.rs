@@ -12,6 +12,17 @@ pub(super) struct ProductNodeTable<E: Field, const LANES: usize> {
 }
 
 impl<E: Field + Ring, const LANES: usize> ProductNodeTable<E, LANES> {
+    pub(super) fn into_rows(self) -> Vec<[E; LANES]> {
+        self.rows
+    }
+
+    pub(super) fn from_rows(rows: Vec<[E; LANES]>) -> Self {
+        Self {
+            class_count: rows.len(),
+            rows,
+        }
+    }
+
     pub(super) fn new(
         plan: DigitRangePlan,
         leaf_polynomials: &[Vec<E>],
@@ -73,6 +84,10 @@ pub(super) struct SecondRoundProductQuartetCoefficients<E: Field> {
 }
 
 impl<E: Field + Ring + Fold> SecondRoundProductQuartetCoefficients<E> {
+    pub(super) fn rows(&self) -> &[[E; MAX_TREE_STAGE_Q_DEGREE + 1]] {
+        &self.rows
+    }
+
     pub(super) fn new<const LANES: usize>(
         folded_pairs: &FoldedProductPairTable<E, LANES>,
         arity: usize,
@@ -106,6 +121,10 @@ impl<E: Field + Ring + Fold> SecondRoundProductQuartetCoefficients<E> {
 }
 
 impl<E: Field + Ring + Fold, const LANES: usize> FoldedProductPairTable<E, LANES> {
+    pub(super) fn rows(&self) -> &[[E; LANES]] {
+        &self.rows
+    }
+
     pub(super) fn new(nodes: &ProductNodeTable<E, LANES>, challenge: E) -> Self {
         let class_count = nodes.class_count;
         let fold_context = E::precompute(challenge);
@@ -141,6 +160,10 @@ pub(super) struct SecondRoundRangeQuartetCoefficients<E: Field> {
 }
 
 impl<E: Field + Ring + Fold> SecondRoundRangeQuartetCoefficients<E> {
+    pub(super) fn rows(&self) -> &[[E; MAX_TREE_STAGE_Q_DEGREE + 1]] {
+        &self.rows
+    }
+
     pub(super) fn new(
         folded_pairs: &FoldedRangeImagePairTable<E>,
         polynomial_coefficients: &[E],
@@ -170,6 +193,10 @@ impl<E: Field + Ring + Fold> SecondRoundRangeQuartetCoefficients<E> {
 }
 
 impl<E: Field + Ring + Fold> FoldedRangeImagePairTable<E> {
+    pub(super) fn rows(&self) -> &[E] {
+        &self.values
+    }
+
     pub(super) fn new(class_count: usize, challenge: E) -> Self {
         let fold_context = E::precompute(challenge);
         let values = (0..class_count * class_count)
@@ -278,6 +305,10 @@ pub(super) struct OrderedProductPairCoefficients<E: Field> {
 }
 
 impl<E: Field + Ring> OrderedProductPairCoefficients<E> {
+    pub(super) fn rows(&self) -> &[[E; MAX_TREE_STAGE_Q_DEGREE + 1]] {
+        &self.rows
+    }
+
     pub(super) fn new<const LANES: usize>(
         nodes: &ProductNodeTable<E, LANES>,
         class_count: usize,
@@ -314,6 +345,10 @@ pub(super) struct OrderedRangePairCoefficients<E: Field> {
 }
 
 impl<E: Field + Ring> OrderedRangePairCoefficients<E> {
+    pub(super) fn rows(&self) -> &[[E; MAX_TREE_STAGE_Q_DEGREE + 1]] {
+        &self.rows
+    }
+
     pub(super) fn new(class_count: usize, polynomial_coefficients: &[E]) -> Self {
         let rows = (0..class_count * class_count)
             .map(|pair_index| {

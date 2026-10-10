@@ -1,3 +1,6 @@
+mod compact;
+pub(crate) use compact::CompactDigitTreeSource;
+
 use std::sync::Arc;
 
 use super::*;
@@ -10,6 +13,8 @@ pub(crate) struct DigitTreePipelines {
     partials: ComputePipelineState,
     reduce: ComputePipelineState,
     bind: ComputePipelineState,
+    compact_partials: ComputePipelineState,
+    compact_materialize: ComputePipelineState,
 }
 
 #[repr(C)]
@@ -28,6 +33,7 @@ struct DigitTreeParams {
 pub(crate) struct DigitTreeSession {
     pipelines: Arc<DigitTreePipelines>,
     buffers: [Buffer; 2],
+    compact: Option<compact::CompactDigitTreeState>,
     current: usize,
     padding: Buffer,
     polynomial: Buffer,
@@ -92,6 +98,8 @@ impl MetalRuntime {
             partials: pipeline("akita_fp128_digit_tree_partials")?,
             reduce: pipeline("akita_fp128_digit_tree_reduce")?,
             bind: pipeline("akita_fp128_digit_tree_bind")?,
+            compact_partials: pipeline("akita_fp128_digit_tree_compact_partials")?,
+            compact_materialize: pipeline("akita_fp128_digit_tree_compact_materialize")?,
         });
         *cached = Some(pipelines.clone());
         Ok(pipelines)
@@ -171,6 +179,7 @@ impl MetalRuntime {
             Ok(DigitTreeSession {
                 pipelines,
                 buffers: [source, next],
+                compact: None,
                 current: 0,
                 padding: padding_buffer,
                 polynomial: polynomial_buffer,
@@ -210,6 +219,9 @@ impl MetalRuntime {
             return Err(MetalCommitError::UnsupportedShape(
                 "digit-tree equality domain mismatch".into(),
             ));
+        }
+        if session.compact.is_some() {
+            return self.compact_digit_tree_round(session, first, second);
         }
         if session.params.pair_count == 0 {
             return Ok(DigitTreeRoundOutcome {
@@ -295,6 +307,9 @@ impl MetalRuntime {
             return Err(MetalCommitError::UnsupportedShape(
                 "cannot bind a final digit-tree row".into(),
             ));
+        }
+        if session.compact.is_some() {
+            return self.compact_digit_tree_bind(session, challenge);
         }
         autoreleasepool(|| {
             let next_rows = session.params.explicit_rows.div_ceil(2);

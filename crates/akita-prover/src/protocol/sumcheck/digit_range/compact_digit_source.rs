@@ -120,6 +120,10 @@ impl CompactDigitSource {
         self.class_count
     }
 
+    pub(super) fn ordered_pairs(&self) -> &[u16] {
+        &self.ordered_range_class_pairs
+    }
+
     pub(super) fn pair_count(&self) -> usize {
         self.ordered_range_class_pairs.len()
     }
