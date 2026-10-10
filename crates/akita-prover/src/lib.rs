@@ -280,6 +280,87 @@ fn centered_coefficient_bounds<const D: usize>(rows: &[[i32; D]]) -> (i32, i32) 
     )
 }
 
+/// Prover-side output of the inner Ajtai commit step.
+///
+/// Ring dimension is stored by the single flat A-ring buffer. Public commit
+/// parameters own the source-block and row boundaries.
+pub struct CommitInnerWitness<F: Field> {
+    /// Recombined inner `A * s_i` rows in `[block][A row][coefficient]` order.
+    pub inner_rows: RingVec<F>,
+}
+
+impl<F: Field> CommitInnerWitness<F> {
+    /// Construct from typed kernel output at a commit boundary.
+    pub fn from_rows<const D: usize>(
+        recomposed_inner_rows: Vec<Vec<CyclotomicRing<F, D>>>,
+    ) -> Self {
+        let coefficient_count = recomposed_inner_rows
+            .iter()
+            .map(Vec::len)
+            .sum::<usize>()
+            .checked_mul(D)
+            .expect("trusted inner commitment output length must fit usize");
+        let mut coefficients = Vec::with_capacity(coefficient_count);
+        for block in recomposed_inner_rows {
+            for row in block {
+                coefficients.extend_from_slice(row.coefficients());
+            }
+        }
+        Self {
+            inner_rows: RingVec::from_coeffs_with_ring_dim(coefficients, D)
+                .expect("typed inner commitment rows have valid ring storage"),
+        }
+    }
+
+    /// Stored ring dimension (coefficients per ring element).
+    pub fn ring_dim(&self) -> usize {
+        self.inner_rows.ring_dim()
+    }
+
+    /// # Errors
+    ///
+    /// Returns an error if the requested ring dimension does not match storage.
+    pub fn ensure_ring_dim<const D: usize>(&self) -> Result<(), AkitaError> {
+        if self.ring_dim() != D {
+            return Err(AkitaError::InvalidInput(format!(
+                "commit inner witness ring_d={} does not match requested D={D}",
+                self.ring_dim()
+            )));
+        }
+        if !self.inner_rows.can_decode_vec(D) {
+            return Err(AkitaError::InvalidSize {
+                expected: D,
+                actual: self.inner_rows.coeff_len(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Borrow one source block using the row count from public parameters.
+    pub fn block_rows<const D: usize>(
+        &self,
+        block: usize,
+        rows_per_block: usize,
+    ) -> Result<&[CyclotomicRing<F, D>], AkitaError> {
+        self.ensure_ring_dim::<D>()?;
+        let start = block
+            .checked_mul(rows_per_block)
+            .ok_or_else(|| AkitaError::InvalidSetup("inner row offset overflow".into()))?;
+        let end = start
+            .checked_add(rows_per_block)
+            .ok_or_else(|| AkitaError::InvalidSetup("inner row end overflow".into()))?;
+        self.inner_rows
+            .as_ring_slice::<D>()?
+            .get(start..end)
+            .ok_or_else(|| AkitaError::InvalidInput("inner row block is out of range".into()))
+    }
+
+    /// Consume the inner commitment output as the persistent A-native rows.
+    pub fn into_inner_rows(self) -> RingVec<F> {
+        self.inner_rows
+    }
+}
+
 #[cfg(test)]
 mod decompose_fold_storage_tests {
     use super::*;
@@ -376,86 +457,5 @@ mod decompose_fold_storage_tests {
             witness.z_folded_rings_trusted::<4>().unwrap()[0].coefficients(),
             &[-3, 0, 2, 4].map(F::from_i64)
         );
-    }
-}
-
-/// Prover-side output of the inner Ajtai commit step.
-///
-/// Ring dimension is stored by the single flat A-ring buffer. Public commit
-/// parameters own the source-block and row boundaries.
-pub struct CommitInnerWitness<F: Field> {
-    /// Recombined inner `A * s_i` rows in `[block][A row][coefficient]` order.
-    pub inner_rows: RingVec<F>,
-}
-
-impl<F: Field> CommitInnerWitness<F> {
-    /// Construct from typed kernel output at a commit boundary.
-    pub fn from_rows<const D: usize>(
-        recomposed_inner_rows: Vec<Vec<CyclotomicRing<F, D>>>,
-    ) -> Self {
-        let coefficient_count = recomposed_inner_rows
-            .iter()
-            .map(Vec::len)
-            .sum::<usize>()
-            .checked_mul(D)
-            .expect("trusted inner commitment output length must fit usize");
-        let mut coefficients = Vec::with_capacity(coefficient_count);
-        for block in recomposed_inner_rows {
-            for row in block {
-                coefficients.extend_from_slice(row.coefficients());
-            }
-        }
-        Self {
-            inner_rows: RingVec::from_coeffs_with_ring_dim(coefficients, D)
-                .expect("typed inner commitment rows have valid ring storage"),
-        }
-    }
-
-    /// Stored ring dimension (coefficients per ring element).
-    pub fn ring_dim(&self) -> usize {
-        self.inner_rows.ring_dim()
-    }
-
-    /// # Errors
-    ///
-    /// Returns an error if the requested ring dimension does not match storage.
-    pub fn ensure_ring_dim<const D: usize>(&self) -> Result<(), AkitaError> {
-        if self.ring_dim() != D {
-            return Err(AkitaError::InvalidInput(format!(
-                "commit inner witness ring_d={} does not match requested D={D}",
-                self.ring_dim()
-            )));
-        }
-        if !self.inner_rows.can_decode_vec(D) {
-            return Err(AkitaError::InvalidSize {
-                expected: D,
-                actual: self.inner_rows.coeff_len(),
-            });
-        }
-        Ok(())
-    }
-
-    /// Borrow one source block using the row count from public parameters.
-    pub fn block_rows<const D: usize>(
-        &self,
-        block: usize,
-        rows_per_block: usize,
-    ) -> Result<&[CyclotomicRing<F, D>], AkitaError> {
-        self.ensure_ring_dim::<D>()?;
-        let start = block
-            .checked_mul(rows_per_block)
-            .ok_or_else(|| AkitaError::InvalidSetup("inner row offset overflow".into()))?;
-        let end = start
-            .checked_add(rows_per_block)
-            .ok_or_else(|| AkitaError::InvalidSetup("inner row end overflow".into()))?;
-        self.inner_rows
-            .as_ring_slice::<D>()?
-            .get(start..end)
-            .ok_or_else(|| AkitaError::InvalidInput("inner row block is out of range".into()))
-    }
-
-    /// Consume the inner commitment output as the persistent A-native rows.
-    pub fn into_inner_rows(self) -> RingVec<F> {
-        self.inner_rows
     }
 }
