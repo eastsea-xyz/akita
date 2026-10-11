@@ -621,9 +621,10 @@ impl MetalBackend {
         let timings = outcome.timings;
         let allocation_bytes = outcome.allocation_bytes;
         let mut centered = outcome.centered_coefficients;
-        let expected_coefficients = plan.num_positions_per_block.checked_mul(D).ok_or_else(|| {
-            MetalCommitError::ShapeOverflow("packed opening output coefficients").into_akita()
-        })?;
+        let expected_coefficients =
+            plan.num_positions_per_block.checked_mul(D).ok_or_else(|| {
+                MetalCommitError::ShapeOverflow("packed opening output coefficients").into_akita()
+            })?;
         if centered.len() != expected_coefficients {
             return Err(AkitaError::InvalidSize {
                 expected: expected_coefficients,
@@ -631,12 +632,9 @@ impl MetalBackend {
             });
         }
         if plan.num_digits > 1 {
-            let expanded_len = centered
-                .len()
-                .checked_mul(plan.num_digits)
-                .ok_or_else(|| {
-                    MetalCommitError::ShapeOverflow("packed opening digit expansion").into_akita()
-                })?;
+            let expanded_len = centered.len().checked_mul(plan.num_digits).ok_or_else(|| {
+                MetalCommitError::ShapeOverflow("packed opening digit expansion").into_akita()
+            })?;
             centered.resize(expanded_len, 0);
             let coefficients_per_position = D.checked_mul(plan.num_digits).ok_or_else(|| {
                 MetalCommitError::ShapeOverflow("packed opening digit expansion").into_akita()
