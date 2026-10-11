@@ -253,17 +253,17 @@ fn fixed_root_packing_round_trips_in_both_bases() {
                         .unwrap();
                     let mut source_digits = Vec::new();
                     for coefficients in evaluations
-                        .chunks_exact(D_A)
+                        .as_chunks::<D_A>()
+                        .0
+                        .iter()
                         .take(root.blocks().positions_per_block)
                     {
                         source_digits.extend(
-                            CyclotomicRing::<PackingField, D_A>::from_coefficients(
-                                coefficients.try_into().unwrap(),
-                            )
-                            .balanced_decompose_pow2_i8(
-                                root.inner().digits.num_digits,
-                                root.inner().digits.log_basis,
-                            ),
+                            CyclotomicRing::<PackingField, D_A>::from_coefficients(*coefficients)
+                                .balanced_decompose_pow2_i8(
+                                    root.inner().digits.num_digits,
+                                    root.inner().digits.log_basis,
+                                ),
                         );
                     }
                     let hint_rows = hint.inner_rows()[0].as_ring_slice::<D_A>().unwrap();

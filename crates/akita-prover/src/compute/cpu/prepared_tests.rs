@@ -9,6 +9,10 @@ use jolt_field::Prime64Offset59;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+#[cfg(feature = "parallel")]
+#[path = "prepared_rayon_tests.rs"]
+mod rayon_cold_cache;
+
 pub(super) type F = Prime64Offset59;
 pub(super) const D: usize = 64;
 

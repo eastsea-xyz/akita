@@ -217,6 +217,8 @@ pub fn planned_exact_ntt_cache_bytes<F: Field + CanonicalEncoding, const D: usiz
         .cache_bytes(num_ring_elements)
 }
 
+// Cache initialization must not schedule Rayon work while owning OnceLock:
+// a stolen sibling can re-enter that cell and block the initializer itself.
 pub(super) fn prepare_exact_ntt_cache<F: Field + CanonicalEncoding, const D: usize>(
     matrix: RingMatrixView<'_, F, D>,
     tail_prefix_len: Option<usize>,
@@ -225,7 +227,9 @@ pub(super) fn prepare_exact_ntt_cache<F: Field + CanonicalEncoding, const D: usi
     macro_rules! homogeneous {
         ($params:expr, $variant:ident, $needs_tail:expr) => {{
             let params = *$params;
-            let neg = cfg_iter!(matrix.as_slice())
+            let neg = matrix
+                .as_slice()
+                .iter()
                 .map(|ring| CyclotomicCrtNtt::from_ring(ring, &params))
                 .collect();
             let requested_tail_len = if $needs_tail {
@@ -243,7 +247,8 @@ pub(super) fn prepare_exact_ntt_cache<F: Field + CanonicalEncoding, const D: usi
                 let tail_rings = matrix.as_slice().get(..tail_len).ok_or_else(|| {
                     AkitaError::InvalidSetup("i16-tail NTT prefix exceeds the base matrix".into())
                 })?;
-                let negacyclic = cfg_iter!(tail_rings)
+                let negacyclic = tail_rings
+                    .iter()
                     .map(|ring| CyclotomicCrtNtt::from_ring(ring, &tail_params))
                     .collect();
                 Some(PreparedI16Tail {
@@ -337,7 +342,8 @@ fn prepare_ifma52_i16_tail<F: Field + CanonicalEncoding, const D: usize>(
         AkitaError::InvalidSetup("mixed IFMA52 tail prefix exceeds the base matrix".into())
     })?;
     let params = CrtNttParamSet::new([I16_TAIL_PRIME]);
-    let negacyclic = cfg_iter!(tail_rings)
+    let negacyclic = tail_rings
+        .iter()
         .map(|ring| CyclotomicCrtNtt::from_ring(ring, &params))
         .collect();
     Ok(PreparedIfma52Tail { negacyclic, params })
@@ -357,7 +363,8 @@ fn prepare_ifma52_i32_tail<F: Field + CanonicalEncoding, const D: usize>(
         AkitaError::InvalidSetup("mixed IFMA52 i32-tail prefix exceeds the base matrix".into())
     })?;
     let params = CrtNttParamSet::new([q128_primes()[0]]);
-    let negacyclic = cfg_iter!(tail_rings)
+    let negacyclic = tail_rings
+        .iter()
         .map(|ring| CyclotomicCrtNtt::from_ring(ring, &params))
         .collect();
     Ok(PreparedIfma52Tail { negacyclic, params })

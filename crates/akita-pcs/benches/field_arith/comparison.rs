@@ -32,7 +32,7 @@ pub(crate) fn bench_comparisons(c: &mut Criterion) {
     group.bench_function("mul_parallel_1024", |b| {
         b.iter(|| {
             let mut sum = BN254Fr::ZERO;
-            for pair in inputs.chunks_exact(2) {
+            for pair in inputs.as_chunks::<2>().0 {
                 sum += pair[0] * pair[1];
             }
             black_box(sum)

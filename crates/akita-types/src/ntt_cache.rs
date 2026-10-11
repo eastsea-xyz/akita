@@ -12,9 +12,7 @@ use akita_algebra::{
     MontCoeff,
 };
 use akita_error::AkitaError;
-#[allow(unused_imports)]
-use jolt_field::solinas::parallel::*;
-use jolt_field::{cfg_iter, CanonicalEncoding, Field, Prime128OffsetA7F7, PseudoMersenne};
+use jolt_field::{CanonicalEncoding, Field, Prime128OffsetA7F7, PseudoMersenne};
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -1031,6 +1029,9 @@ pub fn prepare_reduced_compression_ntt_cache<F: Field + CanonicalEncoding, const
     )
 }
 
+// Cold constructors may run inside OnceLock. A nested Rayon iterator can
+// steal a sibling request that waits on the same cell and deadlock its owner.
+// Keep cache materialization serial; completed-cache kernels stay parallel.
 fn prepare_ntt_cache_with_tail_prefix<F: Field + CanonicalEncoding, const D: usize>(
     matrix: RingMatrixView<'_, F, D>,
     mode: NttCacheMode,
@@ -1063,7 +1064,9 @@ fn prepare_ntt_cache_with_tail_prefix<F: Field + CanonicalEncoding, const D: usi
             match mode {
                 NttCacheMode::Negacyclic => PreparedNttCacheRepr::$variant {
                     neg: Some(
-                        cfg_iter!(matrix.as_slice())
+                        matrix
+                            .as_slice()
+                            .iter()
                             .map(|ring| CyclotomicCrtNtt::from_ring(ring, &params))
                             .collect(),
                     ),
@@ -1075,7 +1078,9 @@ fn prepare_ntt_cache_with_tail_prefix<F: Field + CanonicalEncoding, const D: usi
                 NttCacheMode::Cyclic => PreparedNttCacheRepr::$variant {
                     neg: None,
                     cyc: Some(
-                        cfg_iter!(matrix.as_slice())
+                        matrix
+                            .as_slice()
+                            .iter()
                             .map(|ring| CyclotomicCrtNtt::from_ring_cyclic(ring, &params))
                             .collect(),
                     ),
@@ -1133,7 +1138,8 @@ where
     F: Field + CanonicalEncoding,
     W: akita_algebra::PrimeWidth,
 {
-    cfg_iter!(mat.as_slice())
+    mat.as_slice()
+        .iter()
         .map(|ring| CyclotomicCrtNtt::from_ring_pair_with_params(ring, params))
         .unzip()
 }
