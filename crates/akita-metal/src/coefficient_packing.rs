@@ -41,7 +41,7 @@ fn combined_weights(
     Ok(weights)
 }
 
-fn decode_outcome(
+pub(crate) fn decode_outcome(
     backend: &MetalBackend,
     outcome: CoefficientPackingDispatchOutcome,
 ) -> Result<Vec<F>, AkitaError> {

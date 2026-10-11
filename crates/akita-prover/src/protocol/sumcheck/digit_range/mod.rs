@@ -110,6 +110,12 @@ impl<E: Field> DirectDigitRangeProofInput<E> {
         })
     }
 
+    /// Retain exact immutable signed storage for a packed backend session.
+    pub fn packed_digit_witness(&self) -> (Arc<[u8]>, u8, usize) {
+        let (owner, width, _, stored) = self.digit_witness.view().encoded_storage();
+        (owner.clone(), width, stored)
+    }
+
     /// Decode the packed witness for a backend that consumes signed bytes.
     pub fn decode_digit_witness(&self) -> Vec<i8> {
         self.digit_witness.decode()

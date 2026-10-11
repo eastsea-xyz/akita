@@ -118,6 +118,7 @@ impl MetalRuntime {
             encoder
                 .set_compute_pipeline_state(&self.fp128_direct_relation_two_round_prefix_pipeline);
             encoder.set_buffer(0, Some(&session.compact_digits), 0);
+            set_inline_bytes(encoder, 12, &session.compact_input_descriptor);
             encoder.set_buffer(1, Some(&equality_first_buffer), 0);
             encoder.set_buffer(2, Some(&equality_second_buffer), 0);
             encoder.set_buffer(3, Some(&alpha_points_buffer), 0);
@@ -307,6 +308,7 @@ impl MetalRuntime {
             let encoder = command.new_compute_command_encoder();
             encoder.set_compute_pipeline_state(&self.fp128_direct_relation_initial_pipeline);
             encoder.set_buffer(0, Some(&session.compact_digits), 0);
+            set_inline_bytes(encoder, 14, &session.compact_input_descriptor);
             self.encode_direct_relation_round_buffers(
                 encoder,
                 1,

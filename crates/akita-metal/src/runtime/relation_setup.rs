@@ -3,7 +3,7 @@ use super::*;
 impl MetalRuntime {
     #[expect(
         clippy::too_many_arguments,
-        reason = "the session boundary keeps independent resident relation tables explicit"
+        reason = "existing independent relation session tables"
     )]
     pub(crate) fn begin_fp128_direct_relation(
         &self,
@@ -18,6 +18,39 @@ impl MetalRuntime {
         linear_sources: &[DirectRelationLinearSourceInput],
         linear_dense_values: &[Fp128Limbs],
     ) -> Result<(DirectRelationSession, DispatchTimings), MetalCommitError> {
+        self.begin_fp128_direct_relation_input(
+            packed_witness::CompactWitnessInput::Raw(digits),
+            domain_len,
+            compact_prefix_rounds,
+            coefficient_rounds,
+            lane_weights,
+            linear_segments,
+            lane_offsets,
+            lane_segments,
+            linear_sources,
+            linear_dense_values,
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the session boundary keeps independent resident relation tables explicit"
+    )]
+    pub(super) fn begin_fp128_direct_relation_input(
+        &self,
+        input: packed_witness::CompactWitnessInput<'_>,
+        domain_len: usize,
+        compact_prefix_rounds: usize,
+        coefficient_rounds: usize,
+        lane_weights: &[Fp128Limbs],
+        linear_segments: &[DirectRelationLinearSegment],
+        lane_offsets: &[u32],
+        lane_segments: &[u32],
+        linear_sources: &[DirectRelationLinearSourceInput],
+        linear_dense_values: &[Fp128Limbs],
+    ) -> Result<(DirectRelationSession, DispatchTimings), MetalCommitError> {
+        input.validate(domain_len)?;
+        let live_len = input.live_len();
         let coefficient_count = 1usize
             .checked_shl(u32::try_from(coefficient_rounds).map_err(|_| {
                 MetalCommitError::ShapeOverflow("direct relation coefficient rounds")
@@ -25,7 +58,7 @@ impl MetalRuntime {
             .ok_or(MetalCommitError::ShapeOverflow(
                 "direct relation coefficient count",
             ))?;
-        let live_lane_count = digits.len() / coefficient_count;
+        let live_lane_count = live_len / coefficient_count;
         let linear_source_elements = linear_sources.iter().try_fold(0usize, |total, source| {
             total
                 .checked_add(source.element_len().ok_or(MetalCommitError::ShapeOverflow(
@@ -80,11 +113,11 @@ impl MetalRuntime {
         };
         if domain_len < 16
             || !domain_len.is_power_of_two()
-            || digits.len() > domain_len
+            || live_len > domain_len
             || compact_prefix_rounds == 0
             || compact_prefix_rounds > coefficient_rounds
             || coefficient_rounds > domain_len.trailing_zeros() as usize
-            || !digits.len().is_multiple_of(coefficient_count)
+            || !live_len.is_multiple_of(coefficient_count)
             || lane_weights.is_empty()
             || !lane_weights.len().is_power_of_two()
             || coefficient_count.checked_mul(lane_weights.len()) != Some(domain_len)
@@ -96,7 +129,7 @@ impl MetalRuntime {
             ));
         }
         let setup_start = Instant::now();
-        let compact_digits = self.shared_buffer_from_slice(digits)?;
+        let resident = input.prepare(self, domain_len)?;
         let compact_prefix_size = 1usize
             .checked_shl(u32::try_from(compact_prefix_rounds).map_err(|_| {
                 MetalCommitError::ShapeOverflow("direct relation compact prefix width")
@@ -104,7 +137,7 @@ impl MetalRuntime {
             .ok_or(MetalCommitError::ShapeOverflow(
                 "direct relation compact prefix size",
             ))?;
-        let first_table_len = digits.len().div_ceil(compact_prefix_size).max(1);
+        let first_table_len = live_len.div_ceil(compact_prefix_size).max(1);
         let second_table_len = first_table_len.div_ceil(2).max(1);
         let first_table_bytes = first_table_len.checked_mul(size_of::<Fp128Limbs>()).ok_or(
             MetalCommitError::ShapeOverflow("direct relation first table bytes"),
@@ -128,7 +161,7 @@ impl MetalRuntime {
             self.shared_buffer_from_slice(lane_weights)?,
             self.private_buffer(second_lane_bytes)?,
         ];
-        let maximum_workgroups = direct_range_workgroups(digits.len().div_ceil(2));
+        let maximum_workgroups = direct_range_workgroups(live_len.div_ceil(2));
         let partial_bytes = maximum_workgroups
             .checked_mul(FP128_DIRECT_RELATION_STORED_COEFFICIENTS)
             .and_then(|count| count.checked_mul(size_of::<Fp128Limbs>()))
@@ -378,8 +411,8 @@ impl MetalRuntime {
         } else {
             (Duration::ZERO, None)
         };
-        let allocation_bytes = digits
-            .len()
+        let allocation_bytes = resident
+            .allocation_bytes
             .checked_add(first_table_bytes)
             .and_then(|bytes| bytes.checked_add(second_table_bytes))
             .and_then(|bytes| bytes.checked_add(partial_bytes))
@@ -401,7 +434,9 @@ impl MetalRuntime {
             ))?;
         Ok((
             DirectRelationSession {
-                compact_digits,
+                compact_digits: resident.buffer,
+                compact_input_descriptor: resident.descriptor,
+                compact_input_owner: resident.owner,
                 tables,
                 partials,
                 round_output,
@@ -422,9 +457,9 @@ impl MetalRuntime {
                 two_round_prefix_partials,
                 two_round_prefix_output,
                 two_round_prefix_max_workgroups,
-                live_len: digits.len(),
+                live_len,
                 current_len: domain_len,
-                current_live_len: digits.len(),
+                current_live_len: live_len,
                 current_table: None,
                 current_lane_weight_table: 0,
                 current_lane_count: lane_weights.len(),

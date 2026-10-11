@@ -115,3 +115,6 @@ mod setup_contraction_admission_tests;
 
 #[cfg(target_os = "macos")]
 mod setup_contractions;
+
+#[cfg(target_os = "macos")]
+mod stage3_setup;

@@ -641,15 +641,18 @@ impl DirectDigitRangeProofBackend<F, F> for MetalBackend {
             }
             None => return Err(MetalCommitError::DeviceUnavailable.into_akita()),
         };
-        let decoded_witness = {
-            let _span = tracing::info_span!("direct_range_decode_packed_digits").entered();
-            input.decode_digit_witness()
+        let (owner, bit_width, stored_len) = input.packed_digit_witness();
+        let packed_witness = crate::runtime::PackedWitnessInput {
+            owner,
+            bit_width,
+            stored_len,
+            live_len: input.digit_witness_len(),
         };
         const COMPACT_PREFIX_ROUNDS: usize = 3;
         let (mut session, setup_time) = {
             let _span = tracing::info_span!("direct_range_session_setup").entered();
-            match runtime.begin_fp128_direct_range(
-                &decoded_witness,
+            match runtime.begin_fp128_direct_range_packed(
+                &packed_witness,
                 domain_len,
                 COMPACT_PREFIX_ROUNDS,
             ) {
@@ -929,14 +932,17 @@ impl DirectRelationRangeProofBackend<F, F> for MetalBackend {
                 )
             })
             .collect::<Vec<_>>();
-        let decoded_witness = {
-            let _span = tracing::info_span!("direct_relation_decode_packed_digits").entered();
-            input.decode_compact_witness()
+        let (owner, bit_width, stored_len) = input.packed_compact_witness();
+        let packed_witness = crate::runtime::PackedWitnessInput {
+            owner,
+            bit_width,
+            stored_len,
+            live_len: stored_len,
         };
         drop(_host_span);
         let _session_span = tracing::info_span!("direct_relation_session_setup").entered();
-        let session = runtime.begin_fp128_direct_relation(
-            &decoded_witness,
+        let session = runtime.begin_fp128_direct_relation_packed(
+            &packed_witness,
             input.domain_len(),
             COMPACT_PREFIX_ROUNDS,
             input.coefficient_rounds(),
@@ -1178,6 +1184,14 @@ impl DirectRelationRangeProofBackend<F, F> for MetalBackend {
 
 impl ComputeBackendSetup<F> for MetalBackend {
     type PreparedSetup = MetalPreparedSetup;
+
+    fn contract_setup_product<E: akita_types::FpExtEncoding<F>>(
+        &self,
+        prepared: &Self::PreparedSetup,
+        plan: akita_prover::compute::SetupProductContractionPlan<'_, E>,
+    ) -> Result<Option<Vec<E>>, AkitaError> {
+        self.stage3_setup_contraction(prepared, plan)
+    }
 
     fn contract_setup_columns<E: akita_types::FpExtEncoding<F>>(
         &self,

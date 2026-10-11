@@ -222,6 +222,10 @@ struct D512LinearNttPrime {
     int montsq;
 };
 
+struct PackedWitnessDescriptor { ulong stored_len; ulong bit_width; };
+inline int akita_compact_witness_digit(device const char* digits, ulong index,
+    constant PackedWitnessDescriptor& source);
+
 struct DirectRangeParams {
     ulong live_len;
     ulong current_len;
@@ -2949,6 +2953,7 @@ kernel void akita_fp128_direct_range_initial_partials(
     device const AkitaFp128 *e_second [[buffer(2)]],
     device AkitaFp128 *partials [[buffer(3)]],
     constant DirectRangeParams &params [[buffer(4)]],
+    constant PackedWitnessDescriptor &packed_source [[buffer(5)]],
     uint thread_index [[thread_index_in_threadgroup]],
     uint3 threadgroup_index [[threadgroup_position_in_grid]])
 {
@@ -2965,9 +2970,9 @@ kernel void akita_fp128_direct_range_initial_partials(
     ulong stride = params.workgroups * 256ul;
     for (ulong pair = global_thread; pair < params.pair_count; pair += stride) {
         ulong left_index = pair * 2ul;
-        int left_digit = left_index < params.live_len ? (int)digits[left_index] : 0;
+        int left_digit = left_index < params.live_len ? akita_compact_witness_digit(digits, left_index, packed_source) : 0;
         int right_digit = left_index + 1ul < params.live_len
-            ? (int)digits[left_index + 1ul]
+            ? akita_compact_witness_digit(digits, left_index + 1ul, packed_source)
             : 0;
         long left = (long)left_digit * (long)(left_digit + 1);
         long right = (long)right_digit * (long)(right_digit + 1);
@@ -3077,6 +3082,7 @@ kernel void akita_fp128_direct_range_compact_fold_partials(
     device AkitaFp128 *partials [[buffer(4)]],
     device const AkitaFp128 *prefix_weights [[buffer(5)]],
     constant DirectRangeParams &params [[buffer(6)]],
+    constant PackedWitnessDescriptor &packed_source [[buffer(7)]],
     uint thread_index [[thread_index_in_threadgroup]],
     uint3 threadgroup_index [[threadgroup_position_in_grid]])
 {
@@ -3099,7 +3105,7 @@ kernel void akita_fp128_direct_range_compact_fold_partials(
                 ulong input_start = output_index * params.prefix_size;
                 for (ulong prefix = 0ul; prefix < params.prefix_size; ++prefix) {
                     ulong input_index = input_start + prefix;
-                    int digit = input_index < params.live_len ? (int)digits[input_index] : 0;
+                    int digit = input_index < params.live_len ? akita_compact_witness_digit(digits, input_index, packed_source) : 0;
                     long range_image = (long)digit * (long)(digit + 1);
                     value = akita_add(
                         value,
@@ -3302,6 +3308,7 @@ kernel void akita_fp128_direct_relation_two_round_prefix_partials(
     device const DirectRelationLinearSegment *segments [[buffer(9)]],
     device AkitaFp128 *partials [[buffer(10)]],
     constant DirectRelationTwoRoundPrefixParams &params [[buffer(11)]],
+    constant PackedWitnessDescriptor &packed_source [[buffer(12)]],
     uint thread_index [[thread_index_in_threadgroup]],
     uint3 threadgroup_index [[threadgroup_position_in_grid]])
 {
@@ -3325,10 +3332,10 @@ kernel void akita_fp128_direct_relation_two_round_prefix_partials(
         AkitaFp128 inner = akita_zero();
         for (ulong y_quad = 0ul; y_quad < params.y_quads; ++y_quad) {
             ulong digit_base = lane * params.coefficient_count + 4ul * y_quad;
-            int value_00 = (int)digits[digit_base];
-            int value_10 = (int)digits[digit_base + 1ul];
-            int value_01 = (int)digits[digit_base + 2ul];
-            int value_11 = (int)digits[digit_base + 3ul];
+            int value_00 = akita_compact_witness_digit(digits, digit_base, packed_source);
+            int value_10 = akita_compact_witness_digit(digits, digit_base + 1ul, packed_source);
+            int value_01 = akita_compact_witness_digit(digits, digit_base + 2ul, packed_source);
+            int value_11 = akita_compact_witness_digit(digits, digit_base + 3ul, packed_source);
             int witness_point = akita_stage2_prefix_integer_point(
                 value_00, value_10, value_01, value_11, point);
             if (norm_point) {
@@ -3381,10 +3388,10 @@ kernel void akita_fp128_direct_relation_two_round_prefix_partials(
                             point);
                         ulong digit_base = lane * params.coefficient_count + 4ul * y_quad;
                         int witness_point = akita_stage2_prefix_integer_point(
-                            (int)digits[digit_base],
-                            (int)digits[digit_base + 1ul],
-                            (int)digits[digit_base + 2ul],
-                            (int)digits[digit_base + 3ul],
+                            akita_compact_witness_digit(digits, digit_base, packed_source),
+                            akita_compact_witness_digit(digits, digit_base + 1ul, packed_source),
+                            akita_compact_witness_digit(digits, digit_base + 2ul, packed_source),
+                            akita_compact_witness_digit(digits, digit_base + 3ul, packed_source),
                             point);
                         segment_inner = akita_add(
                             segment_inner,
@@ -3454,13 +3461,13 @@ inline AkitaFp128 akita_direct_relation_compact_value(
     device const char *digits,
     device const AkitaFp128 *prefix_weights,
     ulong index,
-    constant DirectRelationParams &params)
+    constant DirectRelationParams &params, constant PackedWitnessDescriptor &packed_source)
 {
     ulong input_start = index * params.prefix_size;
     AkitaFp128 value = akita_zero();
     for (ulong prefix = 0ul; prefix < params.prefix_size; ++prefix) {
         ulong input_index = input_start + prefix;
-        int digit = input_index < params.live_len ? (int)digits[input_index] : 0;
+        int digit = input_index < params.live_len ? akita_compact_witness_digit(digits, input_index, packed_source) : 0;
         AkitaFp128 weight;
         if (params.resident_challenges != 0ul) {
             weight = akita_from_u32(1u);
@@ -3985,6 +3992,7 @@ kernel void akita_fp128_direct_relation_initial_partials(
     device const AkitaFp128 *prefix_weights [[buffer(11)]],
     constant DirectRelationScalars &scalars [[buffer(12)]],
     constant DirectRelationParams &params [[buffer(13)]],
+    constant PackedWitnessDescriptor &packed_source [[buffer(14)]],
     uint thread_index [[thread_index_in_threadgroup]],
     uint3 threadgroup_index [[threadgroup_position_in_grid]])
 {
@@ -3999,9 +4007,9 @@ kernel void akita_fp128_direct_relation_initial_partials(
     ulong stride = params.workgroups * 256ul;
     for (ulong pair = global_thread; pair < params.pair_count; pair += stride) {
         AkitaFp128 left = akita_direct_relation_compact_value(
-            digits, prefix_weights, 2ul * pair, params);
+            digits, prefix_weights, 2ul * pair, params, packed_source);
         AkitaFp128 right = akita_direct_relation_compact_value(
-            digits, prefix_weights, 2ul * pair + 1ul, params);
+            digits, prefix_weights, 2ul * pair + 1ul, params, packed_source);
         akita_direct_relation_coefficients(
             left, right, pair, e_first, e_second, alpha, lane_weights,
             linear_values, source_offsets, lane_offsets, lane_segments, segments,
@@ -4028,6 +4036,7 @@ kernel void akita_fp128_direct_relation_compact_fold_partials(
     device const AkitaFp128 *prefix_weights [[buffer(12)]],
     constant DirectRelationScalars &scalars [[buffer(13)]],
     constant DirectRelationParams &params [[buffer(14)]],
+    constant PackedWitnessDescriptor &packed_source [[buffer(15)]],
     uint thread_index [[thread_index_in_threadgroup]],
     uint3 threadgroup_index [[threadgroup_position_in_grid]])
 {
@@ -4044,11 +4053,11 @@ kernel void akita_fp128_direct_relation_compact_fold_partials(
         ulong left_index = 2ul * pair;
         AkitaFp128 left = left_index < params.current_live_len
             ? akita_direct_relation_compact_value(
-                digits, prefix_weights, left_index, params)
+                digits, prefix_weights, left_index, params, packed_source)
             : akita_zero();
         AkitaFp128 right = left_index + 1ul < params.current_live_len
             ? akita_direct_relation_compact_value(
-                digits, prefix_weights, left_index + 1ul, params)
+                digits, prefix_weights, left_index + 1ul, params, packed_source)
             : akita_zero();
         if (params.materialize_prefix != 0ul) {
             if (left_index < params.current_live_len) {
@@ -4171,6 +4180,7 @@ kernel void akita_fp128_direct_relation_additional_compact_partials(
     device AkitaFp128 *partials [[buffer(3)]],
     constant DirectRelationScalars &scalars [[buffer(4)]],
     constant DirectRelationParams &params [[buffer(5)]],
+    constant PackedWitnessDescriptor &packed_source [[buffer(6)]],
     uint thread_index [[thread_index_in_threadgroup]],
     uint3 threadgroup_index [[threadgroup_position_in_grid]])
 {
@@ -4186,9 +4196,9 @@ kernel void akita_fp128_direct_relation_additional_compact_partials(
     for (ulong index = global_thread; index < params.additional_pair_count; index += stride) {
         DirectRelationAdditionalPair pair = pairs[index];
         AkitaFp128 left = akita_direct_relation_compact_value(
-            digits, prefix_weights, 2ul * pair.parent, params);
+            digits, prefix_weights, 2ul * pair.parent, params, packed_source);
         AkitaFp128 right = akita_direct_relation_compact_value(
-            digits, prefix_weights, 2ul * pair.parent + 1ul, params);
+            digits, prefix_weights, 2ul * pair.parent + 1ul, params, packed_source);
         akita_direct_relation_additional_coefficients(
             left, right, pair, scalars, sum_0, sum_2, sum_3);
     }

@@ -87,6 +87,26 @@ impl MetalRuntime {
         rows: &[SparseHighHalfRow],
         subtract: &[Fp128Limbs],
     ) -> Result<SparseHighHalfOutcome, MetalCommitError> {
+        // This optimization is specific to the concrete canonical Fp128 ABI.
+        // Fp128 is transparent over canonical little-endian words (field.rs byte
+        // identity tests), and the ring is transparent over [F; D]. Compatible
+        // host alignments suffice: owned copies have device-buffer alignment;
+        // borrowed buffers additionally pass shared_slice_buffer's page checks.
+        if !cfg!(target_endian = "little")
+            || size_of::<F>() != size_of::<Fp128Limbs>()
+            || size_of::<<F as crate::field::MetalField>::DeviceElement>()
+                != size_of::<Fp128Limbs>()
+            || std::mem::align_of::<<F as crate::field::MetalField>::DeviceElement>()
+                != std::mem::align_of::<Fp128Limbs>()
+            || std::mem::align_of::<F>() > std::mem::align_of::<Fp128Limbs>()
+            || !std::mem::align_of::<Fp128Limbs>().is_multiple_of(std::mem::align_of::<F>())
+            || std::mem::align_of::<CyclotomicRing<F, D>>() != std::mem::align_of::<F>()
+            || D.checked_mul(size_of::<F>()) != Some(size_of::<CyclotomicRing<F, D>>())
+        {
+            return Err(MetalCommitError::UnsupportedShape(
+                "sparse high-half source does not match the canonical device ABI".into(),
+            ));
+        }
         let source_coefficients = sources.iter().try_fold(0usize, |total, source| {
             source
                 .len()
@@ -156,21 +176,50 @@ impl MetalRuntime {
         autoreleasepool(|| {
             let setup_start = Instant::now();
             let source_bytes = source_coefficients.max(1) * size_of::<Fp128Limbs>();
-            let source_buffer = self.shared_buffer(source_bytes)?;
-            let mut destination = source_buffer.contents().cast::<Fp128Limbs>();
-            for source in sources {
-                for ring in *source {
-                    for &value in ring.coefficients() {
-                        // SAFETY: the checked sum of all distinct source extents bounds
-                        // this disjoint sequential initialization; borrowed sources stay
-                        // alive through synchronous command completion below.
+            let source_buffer = match sources {
+                [source] if !source.is_empty() => self.shared_slice_buffer(source)?,
+                _ => {
+                    let buffer = self.shared_buffer(source_bytes)?;
+                    let mut destination = buffer.contents().cast::<u8>();
+                    if source_coefficients == 0 {
+                        // SAFETY: the empty-source dummy owns source_bytes (16)
+                        // bytes; initializing it keeps empty batches fully defined.
                         unsafe {
-                            destination.write(Fp128Limbs::from_field(value));
-                            destination = destination.add(1);
+                            destination.write_bytes(0, source_bytes);
                         }
                     }
+                    for source in sources {
+                        let bytes = size_of_val(*source);
+                        if bytes == 0 {
+                            continue;
+                        }
+                        // SAFETY: the ABI checks above establish a padding-free
+                        // canonical field/ring representation. The checked total
+                        // source extent bounds each disjoint bulk destination;
+                        // each borrowed source slice is initialized for bytes.
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(
+                                source.as_ptr().cast::<u8>(),
+                                destination,
+                                bytes,
+                            );
+                            destination = destination.add(bytes);
+                        }
+                    }
+                    SharedSliceBuffer {
+                        buffer,
+                        zero_copy: false,
+                        marker: PhantomData,
+                    }
                 }
-            }
+            };
+            // Keep this borrow guard intact through complete_command and readback.
+            // The no-copy Metal reference never escapes with its host owner absent.
+            let source_allocation_bytes = if source_buffer.zero_copy {
+                0
+            } else {
+                source_bytes
+            };
             let terms_buffer = if terms.is_empty() {
                 self.shared_buffer_from_slice(&[SparseHighHalfTerm::default()])?
             } else {
@@ -186,7 +235,7 @@ impl MetalRuntime {
                 term_count: terms.len() as u64,
             };
             let allocation_bytes = [
-                source_bytes,
+                source_allocation_bytes,
                 terms_buffer.length() as usize,
                 rows_buffer.length() as usize,
                 output_bytes,
@@ -206,7 +255,7 @@ impl MetalRuntime {
             let encoder = command.new_compute_command_encoder();
             encoder.set_compute_pipeline_state(&self.sparse_high_half_pipeline);
             for (index, buffer) in [
-                &source_buffer,
+                &source_buffer.buffer,
                 &terms_buffer,
                 &rows_buffer,
                 &subtract_buffer,

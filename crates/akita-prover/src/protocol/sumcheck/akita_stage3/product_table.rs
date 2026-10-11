@@ -1,12 +1,18 @@
 use super::utils::{accumulate_left_round, fold_dense_left_round, fold_factor_in_place};
 #[cfg(test)]
 use super::utils::{accumulate_right_round, fold_left_round, fold_right_round, product_claim};
+use crate::compute::{SetupProductAxis, SetupProductContractionPlan};
 use akita_algebra::eq_poly::EqPolynomial;
 use akita_algebra::ring::eval_flat_ring_at_pows_fast;
 use akita_algebra::uni_poly::UniPoly;
 use akita_error::AkitaError;
 use jolt_field::solinas::parallel::*;
 use jolt_field::{Field, MulBaseUnreduced, Ring, Zero};
+
+pub(super) type SetupProductProjection<'a, E> = dyn Fn(SetupProductContractionPlan<'_, E>) -> Result<Option<Vec<E>>, AkitaError>
+    + Send
+    + Sync
+    + 'a;
 
 /// One dense factored setup-product term
 /// `sum_{left,right} table[left,right] * left_factor[left] * right_factor[right]`.
@@ -31,6 +37,7 @@ pub(super) struct FactoredProductTerm<E: Field> {
 /// field.
 pub(super) struct RectangularSetupProductTerm<'a, F: Field, E: Field> {
     setup: &'a [F],
+    projector: Option<Box<SetupProductProjection<'a, E>>>,
     required_rows: usize,
     row_capacity: usize,
     coefficient_len: usize,
@@ -54,6 +61,7 @@ where
         required_rows: usize,
         index_factor: Vec<E>,
         coefficient_factor: Vec<E>,
+        projector: Option<Box<SetupProductProjection<'a, E>>>,
     ) -> Result<Self, AkitaError> {
         if required_rows == 0
             || index_factor.is_empty()
@@ -78,7 +86,28 @@ where
         }
 
         let coefficient_len = coefficient_factor.len();
-        let coefficient_table = {
+        let projected = projector
+            .as_ref()
+            .map(|dispatch| {
+                dispatch(SetupProductContractionPlan {
+                    active_rows: required_rows,
+                    row_capacity: index_factor.len(),
+                    coefficient_len,
+                    axis: SetupProductAxis::Coefficient,
+                    weights: &index_factor[..required_rows],
+                })
+            })
+            .transpose()?
+            .flatten();
+        let coefficient_table = if let Some(values) = projected {
+            if values.len() != coefficient_len {
+                return Err(AkitaError::InvalidSize {
+                    expected: coefficient_len,
+                    actual: values.len(),
+                });
+            }
+            values
+        } else {
             let _span = tracing::info_span!(
                 "stage3_setup_coefficient_pass",
                 kernel = "rectangular_base_field",
@@ -126,6 +155,7 @@ where
 
         let mut term = Self {
             setup,
+            projector,
             required_rows,
             row_capacity: index_factor.len(),
             coefficient_len,
@@ -143,7 +173,7 @@ where
         // construction so the first index round (or a zero-round final value)
         // consumes the same canonical table as every other geometry.
         if coefficient_rounds == 0 {
-            term.materialize_index_table();
+            term.materialize_index_table()?;
         }
         Ok(term)
     }
@@ -172,12 +202,21 @@ where
     }
 
     pub(super) fn ingest_challenge(&mut self, round: usize, challenge: E) {
+        self.ingest_challenge_checked(round, challenge)
+            .expect("infallible CPU setup-product fold");
+    }
+
+    pub(super) fn ingest_challenge_checked(
+        &mut self,
+        round: usize,
+        challenge: E,
+    ) -> Result<(), AkitaError> {
         if round < self.coefficient_rounds {
             self.coefficient_challenges.push(challenge);
             fold_dense_left_round(&mut self.coefficient_table, challenge);
             fold_factor_in_place(&mut self.coefficient_factor, challenge);
             if round + 1 == self.coefficient_rounds {
-                self.materialize_index_table();
+                self.materialize_index_table()?;
             }
         } else {
             fold_dense_left_round(
@@ -188,9 +227,10 @@ where
             );
             fold_factor_in_place(&mut self.index_factor, challenge);
         }
+        Ok(())
     }
 
-    fn materialize_index_table(&mut self) {
+    fn materialize_index_table(&mut self) -> Result<(), AkitaError> {
         let coefficient_eq = EqPolynomial::evals(&self.coefficient_challenges)
             .expect("validated power-of-two setup coefficient domain");
         debug_assert_eq!(coefficient_eq.len(), self.coefficient_len);
@@ -205,16 +245,41 @@ where
             setup_table_state_elements = (self.row_capacity + self.coefficient_len) as u64,
         )
         .entered();
-        let index_table = cfg_into_iter!(0..self.row_capacity)
-            .map(|setup_index| {
-                let start = setup_index * self.coefficient_len;
-                eval_flat_ring_at_pows_fast(
-                    &self.setup[start..start + self.coefficient_len],
-                    &coefficient_eq,
-                )
+        let projected = self
+            .projector
+            .as_ref()
+            .map(|dispatch| {
+                dispatch(SetupProductContractionPlan {
+                    active_rows: self.required_rows,
+                    row_capacity: self.row_capacity,
+                    coefficient_len: self.coefficient_len,
+                    axis: SetupProductAxis::Index,
+                    weights: &coefficient_eq,
+                })
             })
-            .collect::<Vec<_>>();
+            .transpose()?
+            .flatten();
+        let index_table = if let Some(values) = projected {
+            if values.len() != self.row_capacity {
+                return Err(AkitaError::InvalidSize {
+                    expected: self.row_capacity,
+                    actual: values.len(),
+                });
+            }
+            values
+        } else {
+            cfg_into_iter!(0..self.row_capacity)
+                .map(|setup_index| {
+                    let start = setup_index * self.coefficient_len;
+                    eval_flat_ring_at_pows_fast(
+                        &self.setup[start..start + self.coefficient_len],
+                        &coefficient_eq,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
         self.index_table = Some(index_table);
+        Ok(())
     }
 
     pub(super) fn folded_table_value(&self) -> Result<E, AkitaError> {
@@ -362,6 +427,7 @@ mod tests {
             required_rows,
             index_factor,
             coefficient_factor,
+            None,
         )
         .expect("rectangular setup product");
         assert_eq!(dense.input_claim(), rectangular.input_claim());

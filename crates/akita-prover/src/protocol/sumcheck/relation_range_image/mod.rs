@@ -429,6 +429,12 @@ impl<'a, E: Field> DirectRelationRangePreparationInput<'a, E> {
         })
     }
 
+    /// Retain exact immutable signed storage for a packed backend session.
+    pub fn packed_compact_witness(&self) -> (std::sync::Arc<[u8]>, u8, usize) {
+        let (owner, width, _, stored) = self.compact_witness.view().encoded_storage();
+        (owner.clone(), width, stored)
+    }
+
     pub fn decode_compact_witness(&self) -> Vec<i8> {
         self.compact_witness.decode()
     }

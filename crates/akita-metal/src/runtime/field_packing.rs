@@ -45,6 +45,78 @@ impl std::ops::Deref for FieldPackingBuffer<'_> {
 }
 
 impl MetalRuntime {
+    pub(crate) fn admit_field_coefficient_packing(
+        &self,
+        params: FieldCoefficientPackingParams,
+        weight_count: usize,
+        source_count: usize,
+    ) -> Result<u64, MetalCommitError> {
+        let weights = params
+            .positions_per_block
+            .checked_mul(params.stride)
+            .and_then(|count| count.checked_mul(params.extension_degree))
+            .ok_or(MetalCommitError::ShapeOverflow("field packing weights"))?;
+        let output = params
+            .num_blocks
+            .checked_mul(params.subring_dimension)
+            .and_then(|count| count.checked_mul(params.extension_degree))
+            .ok_or(MetalCommitError::ShapeOverflow("field packing output"))?;
+        params.num_live_positions.checked_mul(params.ring_d).ok_or(
+            MetalCommitError::ShapeOverflow("field packing source extent"),
+        )?;
+        if source_count == 0
+            || params.ring_d == 0
+            || params.stride == 0
+            || params.subring_dimension == 0
+            || !matches!(params.extension_degree, 1 | 2)
+            || params.stride.checked_mul(params.subring_dimension) != Some(params.ring_d)
+            || params.num_live_positions == 0
+            || params.positions_per_block == 0
+            || params.num_blocks
+                != params
+                    .num_live_positions
+                    .div_ceil(params.positions_per_block)
+            || params.output_coefficients != output
+            || output > u64::from(u32::MAX)
+            || u64::try_from(weight_count).ok() != Some(weights)
+            || self
+                .fp128_field_coefficient_packing_pipeline
+                .max_total_threads_per_threadgroup()
+                < FP128_COEFFICIENT_PACKING_THREADS as u64
+            || self
+                .fp128_packed_digit_coefficient_packing_pipeline
+                .max_total_threads_per_threadgroup()
+                < FP128_COEFFICIENT_PACKING_THREADS as u64
+        {
+            return Err(MetalCommitError::UnsupportedShape(
+                "fp128 field packing geometry is unsupported".into(),
+            ));
+        }
+        self.validate_buffer_length(weight_count.checked_mul(size_of::<Fp128Limbs>()).ok_or(
+            MetalCommitError::ShapeOverflow("field packing weight bytes"),
+        )?)?;
+        let batch_output = usize::try_from(output)
+            .ok()
+            .and_then(|n| n.checked_mul(source_count))
+            .and_then(|n| n.checked_mul(size_of::<Fp128Limbs>()))
+            .ok_or(MetalCommitError::ShapeOverflow(
+                "field packing batch output bytes",
+            ))?;
+        self.validate_buffer_length(batch_output)?;
+        Ok(output)
+    }
+
+    pub(crate) fn admit_field_packing_source_bytes(
+        &self,
+        coefficients: usize,
+    ) -> Result<(), MetalCommitError> {
+        self.validate_buffer_length(
+            coefficients
+                .checked_mul(size_of::<Fp128Limbs>())
+                .ok_or(MetalCommitError::ShapeOverflow("field packing input bytes"))?,
+        )
+    }
+
     pub(crate) fn dispatch_fp128_field_coefficient_packing(
         &self,
         sources: &[FieldPackingSource<'_>],
@@ -52,47 +124,14 @@ impl MetalRuntime {
         params: FieldCoefficientPackingParams,
     ) -> Result<CoefficientPackingDispatchOutcome, MetalCommitError> {
         autoreleasepool(|| {
-            let weights = params
-                .positions_per_block
-                .checked_mul(params.stride)
-                .and_then(|count| count.checked_mul(params.extension_degree))
-                .ok_or(MetalCommitError::ShapeOverflow("field packing weights"))?;
-            let output = params
-                .num_blocks
-                .checked_mul(params.subring_dimension)
-                .and_then(|count| count.checked_mul(params.extension_degree))
-                .ok_or(MetalCommitError::ShapeOverflow("field packing output"))?;
+            let output = self.admit_field_coefficient_packing(
+                params,
+                combined_weights.len(),
+                sources.len(),
+            )?;
             let live_capacity = params.num_live_positions.checked_mul(params.ring_d).ok_or(
                 MetalCommitError::ShapeOverflow("field packing source extent"),
             )?;
-            if sources.is_empty()
-                || params.ring_d == 0
-                || params.stride == 0
-                || params.subring_dimension == 0
-                || !matches!(params.extension_degree, 1 | 2)
-                || params.stride.checked_mul(params.subring_dimension) != Some(params.ring_d)
-                || params.num_live_positions == 0
-                || params.positions_per_block == 0
-                || params.num_blocks
-                    != params
-                        .num_live_positions
-                        .div_ceil(params.positions_per_block)
-                || params.output_coefficients != output
-                || output > u64::from(u32::MAX)
-                || u64::try_from(combined_weights.len()).ok() != Some(weights)
-                || self
-                    .fp128_field_coefficient_packing_pipeline
-                    .max_total_threads_per_threadgroup()
-                    < FP128_COEFFICIENT_PACKING_THREADS as u64
-                || self
-                    .fp128_packed_digit_coefficient_packing_pipeline
-                    .max_total_threads_per_threadgroup()
-                    < FP128_COEFFICIENT_PACKING_THREADS as u64
-            {
-                return Err(MetalCommitError::UnsupportedShape(
-                    "fp128 field packing geometry is unsupported".into(),
-                ));
-            }
             // Admit the complete batch before uploading or submitting any work.
             let mut source_params = Vec::with_capacity(sources.len());
             for source in sources {
@@ -104,6 +143,7 @@ impl MetalRuntime {
                         let bytes = coefficients
                             .checked_mul(size_of::<Fp128Limbs>())
                             .ok_or(MetalCommitError::ShapeOverflow("field packing input bytes"))?;
+                        self.admit_field_packing_source_bytes(*coefficients)?;
                         if usize::try_from(buffer.length())
                             .ok()
                             .is_none_or(|len| len < bytes)
@@ -126,6 +166,7 @@ impl MetalRuntime {
                             .ok_or(MetalCommitError::ShapeOverflow(
                                 "packed packing input bytes",
                             ))?;
+                        self.validate_buffer_length(bytes.len())?;
                         if !(1..=8).contains(bit_width)
                             || bytes.len() != required
                             || live_coefficients > stored_coefficients

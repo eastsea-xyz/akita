@@ -20,7 +20,11 @@ use crate::field::{Fp128Limbs, F};
 use crate::MetalCommitError;
 
 mod buffers;
+mod packed_witness;
+pub(crate) use packed_witness::{PackedWitnessDescriptor, PackedWitnessInput};
 mod coefficient_packing;
+#[cfg(test)]
+mod encoded_residency_tests;
 pub(crate) use coefficient_packing::{FieldCoefficientPackingParams, FieldPackingSource};
 pub(crate) mod commands;
 mod commit;
@@ -158,7 +162,9 @@ const KERNEL_SOURCE: &str = concat!(
     "\n",
     include_str!("kernels/sparse_high_half.metal"),
     "\n",
-    include_str!("kernels/setup_contractions.metal")
+    include_str!("kernels/setup_contractions.metal"),
+    "\n",
+    include_str!("kernels/packed_witness.metal")
 );
 /// Largest D512 panel threadgroup; each GPU gets what its compiled pipeline
 /// allows (register pressure: 640 on M1 Max), rounded down to whole simdgroups.
@@ -856,7 +862,9 @@ pub(crate) struct DirectRangeResidentOutcome {
 }
 
 pub(crate) struct DirectRangeSession {
-    compact_digits: Buffer,
+    compact_digits: crate::prepared::MatrixBuffer,
+    compact_input_descriptor: PackedWitnessDescriptor,
+    compact_input_owner: Option<std::sync::Arc<[u8]>>,
     tables: [Buffer; 2],
     partials: Buffer,
     round_output: Buffer,
@@ -928,7 +936,9 @@ pub(crate) struct DirectRelationResidentOutcome {
 }
 
 pub(crate) struct DirectRelationSession {
-    compact_digits: Buffer,
+    compact_digits: crate::prepared::MatrixBuffer,
+    compact_input_descriptor: PackedWitnessDescriptor,
+    compact_input_owner: Option<std::sync::Arc<[u8]>>,
     tables: [Buffer; 2],
     partials: Buffer,
     round_output: Buffer,

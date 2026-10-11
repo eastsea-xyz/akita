@@ -33,6 +33,7 @@ mod poly;
 mod requirements;
 mod runtime_capabilities;
 mod setup_columns;
+mod setup_product;
 mod sparse_high_half;
 mod stack;
 
@@ -78,3 +79,5 @@ pub use stack::{
 };
 
 pub use setup_columns::SetupColumnContractionPlan;
+
+pub use setup_product::{SetupProductAxis, SetupProductContractionPlan};

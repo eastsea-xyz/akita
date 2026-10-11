@@ -31,6 +31,7 @@ impl MetalRuntime {
             encoder.set_label("Akita fp128 direct relation initial partials");
             encoder.set_compute_pipeline_state(&self.fp128_direct_relation_initial_pipeline);
             encoder.set_buffer(0, Some(&session.compact_digits), 0);
+            set_inline_bytes(encoder, 14, &session.compact_input_descriptor);
             self.encode_direct_relation_round_buffers(
                 encoder,
                 1,
@@ -249,6 +250,7 @@ impl MetalRuntime {
                 encoder
                     .set_compute_pipeline_state(&self.fp128_direct_relation_compact_fold_pipeline);
                 encoder.set_buffer(0, Some(&session.compact_digits), 0);
+                set_inline_bytes(encoder, 15, &session.compact_input_descriptor);
             }
             encoder.set_buffer(1, Some(&session.tables[output_table]), 0);
             self.encode_direct_relation_round_buffers(
@@ -509,6 +511,7 @@ impl MetalRuntime {
         let encoder = command.new_compute_command_encoder();
         encoder.set_compute_pipeline_state(&self.fp128_direct_relation_additional_compact_pipeline);
         encoder.set_buffer(0, Some(&session.compact_digits), 0);
+        set_inline_bytes(encoder, 6, &session.compact_input_descriptor);
         encoder.set_buffer(1, Some(prefix), 0);
         encoder.set_buffer(2, Some(pairs), 0);
         encoder.set_buffer(3, Some(&session.partials), 0);

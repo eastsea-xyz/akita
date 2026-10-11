@@ -789,9 +789,10 @@ where
     let proof_w_eval = w_eval;
     transcript.append_serde(ABSORB_STAGE2_NEXT_W_EVAL, &proof_w_eval);
     let stage3_sumcheck_proof = match next_params.recursive() {
-        Some(next_fold_params) => prove_stage3::<F, E, T>(
+        Some(next_fold_params) => prove_stage3::<F, E, T, O>(
             level,
             next_params.setup_contribution_mode(),
+            stack.opening(),
             expanded.as_ref(),
             prefix_slots,
             lp,

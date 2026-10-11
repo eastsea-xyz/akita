@@ -221,9 +221,10 @@ where
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(in crate::protocol::core) fn prove_stage3<F, E, T>(
+pub(in crate::protocol::core) fn prove_stage3<F, E, T, O>(
     level: usize,
     setup_contribution_mode: SetupContributionMode,
+    opening: &crate::compute::OperationCtx<'_, F, O>,
     expanded: &AkitaExpandedSetup<F>,
     prefix_slots: &SetupPrefixProverRegistry<F>,
     lp: &CommittedGroupParams,
@@ -244,6 +245,7 @@ where
         + jolt_field::Unreduced
         + jolt_field::MulBaseUnreduced<F>,
     T: akita_types::ProverTranscriptGrinding<F>,
+    O: crate::ComputeBackendSetup<F>,
 {
     match setup_contribution_mode {
         SetupContributionMode::Recursive => {
@@ -256,8 +258,9 @@ where
             .entered();
             let mut stage3_prover = {
                 let _prepare_span = tracing::info_span!("stage3_prover_prepare").entered();
-                AkitaStage3Prover::new::<T>(
+                AkitaStage3Prover::new::<T, O>(
                     expanded,
+                    opening,
                     prefix_slots,
                     lp,
                     next_level_params,

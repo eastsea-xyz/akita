@@ -80,7 +80,7 @@ where
             claim = compressed.eval_from_hint(&claim, &r_i);
             {
                 let _s = tracing::info_span!("sumcheck_round_fold").entered();
-                self.ingest_challenge(round, r_i);
+                self.ingest_challenge_checked(round, r_i)?;
             }
             round_polys.push(compressed);
         }

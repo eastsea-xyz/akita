@@ -355,6 +355,7 @@ impl MetalRuntime {
                         &self.fp128_direct_relation_compact_fold_pipeline,
                     );
                     encoder.set_buffer(0, Some(&session.compact_digits), 0);
+                    set_inline_bytes(encoder, 15, &session.compact_input_descriptor);
                     encoder.set_buffer(12, Some(&challenges), 0);
                 }
                 encoder.set_buffer(1, Some(&session.tables[output_table]), 0);
@@ -399,6 +400,7 @@ impl MetalRuntime {
                             &self.fp128_direct_relation_additional_compact_pipeline,
                         );
                         encoder.set_buffer(0, Some(&session.compact_digits), 0);
+                        set_inline_bytes(encoder, 6, &session.compact_input_descriptor);
                         encoder.set_buffer(1, Some(&challenges), 0);
                         encoder.set_buffer(2, Some(&additional_pairs[current_additional_table]), 0);
                         encoder.set_buffer(3, Some(&session.partials), 0);

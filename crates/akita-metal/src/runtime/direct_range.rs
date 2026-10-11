@@ -129,6 +129,7 @@ impl MetalRuntime {
             encoder.set_label("Akita fp128 resident direct range initial partials");
             encoder.set_compute_pipeline_state(&self.fp128_direct_range_initial_pipeline);
             encoder.set_buffer(0, Some(&session.compact_digits), 0);
+            set_inline_bytes(encoder, 5, &session.compact_input_descriptor);
             encoder.set_buffer(1, Some(&equality_buffers[0].0), 0);
             encoder.set_buffer(2, Some(&equality_buffers[0].1), 0);
             encoder.set_buffer(3, Some(&session.partials), 0);
@@ -251,6 +252,7 @@ impl MetalRuntime {
                     encoder
                         .set_compute_pipeline_state(&self.fp128_direct_range_compact_fold_pipeline);
                     encoder.set_buffer(0, Some(&session.compact_digits), 0);
+                    set_inline_bytes(encoder, 7, &session.compact_input_descriptor);
                     encoder.set_buffer(5, Some(&challenges), 0);
                 }
                 encoder.set_buffer(1, Some(&session.tables[output_table]), 0);
@@ -354,9 +356,24 @@ impl MetalRuntime {
         domain_len: usize,
         compact_prefix_rounds: usize,
     ) -> Result<(DirectRangeSession, Duration), MetalCommitError> {
+        self.begin_fp128_direct_range_input(
+            packed_witness::CompactWitnessInput::Raw(digits),
+            domain_len,
+            compact_prefix_rounds,
+        )
+    }
+
+    pub(super) fn begin_fp128_direct_range_input(
+        &self,
+        input: packed_witness::CompactWitnessInput<'_>,
+        domain_len: usize,
+        compact_prefix_rounds: usize,
+    ) -> Result<(DirectRangeSession, Duration), MetalCommitError> {
+        input.validate(domain_len)?;
+        let live_len = input.live_len();
         if domain_len < 4
             || !domain_len.is_power_of_two()
-            || digits.len() > domain_len
+            || live_len > domain_len
             || compact_prefix_rounds == 0
             || compact_prefix_rounds >= domain_len.trailing_zeros() as usize
         {
@@ -365,7 +382,7 @@ impl MetalRuntime {
             ));
         }
         let setup_start = Instant::now();
-        let compact_digits = self.shared_buffer_from_slice(digits)?;
+        let resident = input.prepare(self, domain_len)?;
         let compact_prefix_size = 1usize
             .checked_shl(u32::try_from(compact_prefix_rounds).map_err(|_| {
                 MetalCommitError::ShapeOverflow("direct range compact prefix width")
@@ -373,7 +390,7 @@ impl MetalRuntime {
             .ok_or(MetalCommitError::ShapeOverflow(
                 "direct range compact prefix size",
             ))?;
-        let first_table_len = digits.len().div_ceil(compact_prefix_size).max(1);
+        let first_table_len = live_len.div_ceil(compact_prefix_size).max(1);
         let second_table_len = first_table_len.div_ceil(2).max(1);
         let first_table_bytes = first_table_len.checked_mul(size_of::<Fp128Limbs>()).ok_or(
             MetalCommitError::ShapeOverflow("direct range first table bytes"),
@@ -387,7 +404,7 @@ impl MetalRuntime {
             self.private_buffer(first_table_bytes)?,
             self.private_buffer(second_table_bytes)?,
         ];
-        let maximum_pairs = digits.len().div_ceil(2);
+        let maximum_pairs = live_len.div_ceil(2);
         let maximum_workgroups = direct_range_workgroups(maximum_pairs);
         let partial_bytes = maximum_workgroups
             .checked_mul(FP128_DIRECT_RANGE_STORED_COEFFICIENTS)
@@ -404,8 +421,8 @@ impl MetalRuntime {
         let partials = self.private_buffer(partial_bytes)?;
         let round_output = self.shared_buffer(round_output_bytes)?;
         let final_output = self.shared_buffer(final_output_bytes)?;
-        let allocation_bytes = digits
-            .len()
+        let allocation_bytes = resident
+            .allocation_bytes
             .checked_add(first_table_bytes)
             .and_then(|bytes| bytes.checked_add(second_table_bytes))
             .and_then(|bytes| bytes.checked_add(partial_bytes))
@@ -416,14 +433,16 @@ impl MetalRuntime {
             ))?;
         Ok((
             DirectRangeSession {
-                compact_digits,
+                compact_digits: resident.buffer,
+                compact_input_descriptor: resident.descriptor,
+                compact_input_owner: resident.owner,
                 tables,
                 partials,
                 round_output,
                 final_output,
-                live_len: digits.len(),
+                live_len,
                 current_len: domain_len,
-                current_live_len: digits.len(),
+                current_live_len: live_len,
                 current_table: None,
                 compact_prefix_rounds,
                 rounds_folded: 0,
@@ -460,6 +479,7 @@ impl MetalRuntime {
             encoder.set_label("Akita fp128 direct range initial partials");
             encoder.set_compute_pipeline_state(&self.fp128_direct_range_initial_pipeline);
             encoder.set_buffer(0, Some(&session.compact_digits), 0);
+            set_inline_bytes(encoder, 5, &session.compact_input_descriptor);
             encoder.set_buffer(1, Some(&first), 0);
             encoder.set_buffer(2, Some(&second), 0);
             encoder.set_buffer(3, Some(&session.partials), 0);
@@ -601,6 +621,7 @@ impl MetalRuntime {
             } else {
                 encoder.set_compute_pipeline_state(&self.fp128_direct_range_compact_fold_pipeline);
                 encoder.set_buffer(0, Some(&session.compact_digits), 0);
+                set_inline_bytes(encoder, 7, &session.compact_input_descriptor);
             }
             encoder.set_buffer(1, Some(&session.tables[output_table]), 0);
             encoder.set_buffer(2, Some(&first), 0);

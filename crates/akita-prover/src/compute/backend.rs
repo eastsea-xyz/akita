@@ -58,6 +58,21 @@ where
         Ok(None)
     }
 
+    /// Optional canonical stage-3 setup contraction; `None` selects CPU.
+    fn contract_setup_product<E: akita_types::FpExtEncoding<F>>(
+        &self,
+        prepared: &Self::PreparedSetup,
+        plan: super::SetupProductContractionPlan<'_, E>,
+    ) -> Result<Option<Vec<E>>, AkitaError> {
+        plan.validate(
+            self.prepared_expanded_setup(prepared)
+                .shared_matrix()
+                .as_field_slice()
+                .len(),
+        )?;
+        Ok(None)
+    }
+
     /// Build the cache for `key` if absent.
     fn ensure_ntt_slot(
         &self,

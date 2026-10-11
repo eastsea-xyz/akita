@@ -39,6 +39,13 @@ pub trait SumcheckInstanceProver<E: Field>: Send + Sync {
     /// Ingest the verifier challenge `r_round` to fold/bind the current variable.
     fn ingest_challenge(&mut self, round: usize, r_round: E);
 
+    /// Checked fold boundary for arithmetic backends. CPU instances retain
+    /// their existing infallible fold implementation by default.
+    fn ingest_challenge_checked(&mut self, round: usize, r_round: E) -> Result<(), AkitaError> {
+        self.ingest_challenge(round, r_round);
+        Ok(())
+    }
+
     /// Optional end-of-protocol hook after the last challenge has been ingested.
     fn finalize(&mut self) {}
 }

@@ -5,8 +5,12 @@
 //! `S(i, y) * setup_index_weight(i) * alpha(y)` without materializing the full
 //! `setup_index_weight(i) * alpha(y)` table.
 
+#[cfg(test)]
+mod backend_tests;
 mod product_table;
 mod utils;
+
+use crate::compute::{ComputeBackendSetup, OperationCtx, SetupProductContractionPlan};
 
 use akita_algebra::eq_poly::EqPolynomial;
 use akita_algebra::ring::scalar_powers;
@@ -23,7 +27,7 @@ use akita_types::{
     SETUP_SUMCHECK_DEGREE,
 };
 use jolt_field::{CanonicalEncoding, ExtField, Field, MulBaseUnreduced, Ring};
-use product_table::RectangularSetupProductTerm;
+use product_table::{RectangularSetupProductTerm, SetupProductProjection};
 use std::sync::Arc;
 
 /// Output of the setup-only stage-3 prover.
@@ -51,8 +55,9 @@ where
 {
     /// Construct a recursive setup-product sumcheck prover.
     #[allow(clippy::too_many_arguments)]
-    pub fn new<T>(
+    pub fn new<T, B>(
         expanded: &'a AkitaExpandedSetup<F>,
+        opening: &OperationCtx<'a, F, B>,
         prefix_slots: &SetupPrefixProverRegistry<F>,
         lp: &CommittedGroupParams,
         next_fold_level_params: &CommittedGroupParams,
@@ -67,7 +72,13 @@ where
         F: Field + CanonicalEncoding + akita_serialization::AkitaSerialize,
         E: FpExtEncoding<F> + ExtField<F> + AkitaSerialize,
         T: Transcript<F>,
+        B: ComputeBackendSetup<F>,
     {
+        let backend = opening.backend();
+        let prepared = opening.prepared();
+        let projector = Box::new(move |plan: SetupProductContractionPlan<'_, E>| {
+            project_setup_product(expanded, backend, prepared, plan)
+        });
         let setup_coefficient_bits =
             relation_address_geometry.relation_coefficient_variable_count();
         let setup_x_challenges = stage2_challenges
@@ -86,6 +97,7 @@ where
                 setup_x_challenges,
                 relation_address_geometry,
                 transcript,
+                projector,
             )?
         };
         let setup_product_claim = setup_term.input_claim();
@@ -121,6 +133,23 @@ where
     }
 }
 
+fn project_setup_product<F, E, B>(
+    source: &AkitaExpandedSetup<F>,
+    backend: &B,
+    prepared: &B::PreparedSetup,
+    plan: SetupProductContractionPlan<'_, E>,
+) -> Result<Option<Vec<E>>, AkitaError>
+where
+    F: Field + CanonicalEncoding,
+    E: FpExtEncoding<F>,
+    B: ComputeBackendSetup<F>,
+{
+    if !std::ptr::eq(source, backend.prepared_expanded_setup(prepared)) {
+        return Ok(None);
+    }
+    backend.contract_setup_product(prepared, plan)
+}
+
 impl<F, E> SumcheckInstanceProver<E> for AkitaStage3Prover<'_, F, E>
 where
     F: Field,
@@ -145,6 +174,10 @@ where
     fn ingest_challenge(&mut self, round: usize, r_round: E) {
         self.setup.ingest_challenge(round, r_round);
     }
+
+    fn ingest_challenge_checked(&mut self, round: usize, r_round: E) -> Result<(), AkitaError> {
+        self.setup.ingest_challenge_checked(round, r_round)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -159,6 +192,7 @@ fn build_setup_product_term<'a, F, E, T>(
     x_challenges: &[E],
     relation_address_geometry: RelationAddressGeometry,
     transcript: &mut T,
+    projector: Box<SetupProductProjection<'a, E>>,
 ) -> Result<RectangularSetupProductTerm<'a, F, E>, AkitaError>
 where
     F: Field + CanonicalEncoding + akita_serialization::AkitaSerialize,
@@ -235,6 +269,7 @@ where
         active_weight_rows,
         setup_index_weight,
         alpha_pows.to_vec(),
+        Some(projector),
     )
 }
 
