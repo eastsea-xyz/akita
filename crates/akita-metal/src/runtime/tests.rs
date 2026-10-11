@@ -1,4 +1,98 @@
 use super::*;
+use jolt_field::Field;
+
+#[test]
+fn direct_range_session_owns_digits_after_source_overwrite_and_drop() {
+    const DOMAIN_LEN: usize = 64;
+    let runtime = MetalRuntime::new().unwrap();
+    let digits: [i8; 37] = std::array::from_fn(|index| [-2, 1, 0, -1, 1][index % 5]);
+    let mut session = {
+        let mut source = digits.to_vec();
+        let (session, _) = runtime
+            .begin_fp128_direct_range(&source, DOMAIN_LEN, 3)
+            .unwrap();
+        source.fill(127);
+        drop(source);
+        session
+    };
+    let mut table = vec![F::zero(); DOMAIN_LEN];
+    for (value, digit) in table.iter_mut().zip(digits) {
+        let digit = F::from_i64(i64::from(digit));
+        *value = digit * (digit + F::one());
+    }
+    let one = Fp128Limbs::from_field(F::one());
+    let first = [one];
+    let second = vec![one; DOMAIN_LEN / 2];
+    let initial = runtime
+        .dispatch_fp128_direct_range_initial(&session, &first, &second, 4)
+        .unwrap();
+    let mut coefficients = initial.coefficients;
+    let challenges = [3, 5, 7, 11, 13, 17].map(F::from_u64);
+    let two = F::from_u64(2);
+    let half = two.inverse().unwrap();
+    for (round, &challenge) in challenges.iter().enumerate() {
+        // Independently interpolate the dense CPU polynomial Q(u) = u(u - 2).
+        let mut evaluations = [F::zero(); 3];
+        for pair in table.chunks_exact(2) {
+            for (point, evaluation) in evaluations.iter_mut().enumerate() {
+                let value = pair[0] + F::from_u64(point as u64) * (pair[1] - pair[0]);
+                *evaluation += value * (value - two);
+            }
+        }
+        let quadratic = (evaluations[2] - two * evaluations[1] + evaluations[0]) * half;
+        let linear = evaluations[1] - evaluations[0] - quadratic;
+        assert_eq!(
+            coefficients.map(|value| value.into_field(0).unwrap()),
+            [linear, quadratic, F::zero(), F::zero()],
+            "round {round} after discarding the host source"
+        );
+        table = table
+            .chunks_exact(2)
+            .map(|pair| pair[0] + challenge * (pair[1] - pair[0]))
+            .collect();
+        let prefix_weights = if round < 3 {
+            (0..1usize << (round + 1))
+                .map(|prefix| {
+                    let weight = challenges[..=round]
+                        .iter()
+                        .enumerate()
+                        .map(|(bit, &value)| {
+                            if prefix & (1 << bit) == 0 {
+                                F::one() - value
+                            } else {
+                                value
+                            }
+                        })
+                        .product();
+                    Fp128Limbs::from_field(weight)
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let second = vec![one; table.len() / 2];
+        let next_eq = (table.len() > 1).then_some((first.as_slice(), second.as_slice()));
+        let advance = runtime
+            .dispatch_fp128_direct_range_advance(
+                &mut session,
+                Fp128Limbs::from_field(challenge),
+                next_eq,
+                &prefix_weights,
+                4,
+            )
+            .unwrap();
+        if table.len() == 1 {
+            assert_eq!(
+                advance.final_evaluation.unwrap().into_field(0).unwrap(),
+                table[0]
+            );
+            assert!(advance.next_coefficients.is_none());
+        } else {
+            coefficients = advance.next_coefficients.unwrap();
+            assert!(advance.final_evaluation.is_none());
+        }
+    }
+}
 
 fn eval_flat_negacyclic_shift_sequence_into(coefficients: &[F], alpha: F, evaluations: &mut [F]) {
     assert_eq!(evaluations.len(), coefficients.len());

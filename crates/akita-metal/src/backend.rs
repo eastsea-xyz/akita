@@ -660,6 +660,8 @@ impl DirectDigitRangeProofBackend<F, F> for MetalBackend {
                 Err(error) => return Err(error.into_akita()),
             }
         };
+        // Session setup copies the digits into owned Shared storage.
+        drop(decoded_witness);
         self.update_opening_metrics(|metrics| {
             metrics.buffer_setup_time += setup_time;
             metrics.allocation_bytes = metrics
