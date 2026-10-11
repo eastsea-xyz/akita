@@ -84,6 +84,7 @@ fn resident_digit_tree_rounds_and_bind_match_padded_cpu_tables() {
         SetupMatrixCapacity {
             num_field_elements: 512,
         },
+        None,
     )
     .unwrap();
     let metal = MetalBackend::new(MetalExecutionPolicy::RequireMetal).unwrap();
@@ -281,6 +282,7 @@ fn resident_digit_tree_preserves_cpu_tree_proof_and_child_claims() {
         SetupMatrixCapacity {
             num_field_elements: 512,
         },
+        None,
     )
     .unwrap();
     let cpu = CpuBackend::DEFAULT;

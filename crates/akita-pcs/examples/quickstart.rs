@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let evaluation = evaluate_multilinear(&evaluations, &point);
 
     let scheme = load_workspace_scheme::<Config>()?;
-    let setup = scheme.setup_prover(NUM_VARS, 1)?;
+    let setup = scheme.setup_prover(NUM_VARS, 1, None)?;
     let backend = CpuBackend::DEFAULT;
     let prepared = backend.prepare_setup(&setup)?;
     let stack = UniformProverStack::uniform(&backend, &prepared, setup.expanded.as_ref())?;

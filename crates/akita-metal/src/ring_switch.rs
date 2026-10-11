@@ -311,6 +311,7 @@ mod tests {
             SetupMatrixCapacity {
                 num_field_elements: ROWS * COLUMNS * D,
             },
+            None,
         )
         .unwrap();
         let cpu = CpuBackend::DEFAULT;
@@ -381,6 +382,7 @@ mod tests {
             SetupMatrixCapacity {
                 num_field_elements: COLUMNS * D,
             },
+            None,
         )
         .unwrap();
         let z_segment: Vec<[i32; D]> = (0..COLUMNS)
@@ -429,6 +431,7 @@ mod tests {
             SetupMatrixCapacity {
                 num_field_elements: ROWS * MAX_COLUMNS * D,
             },
+            None,
         )
         .unwrap();
         let cpu = CpuBackend::DEFAULT;

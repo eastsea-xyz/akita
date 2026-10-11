@@ -65,7 +65,7 @@ pub(crate) fn run_batched_onehot<FF, const D: usize, Cfg: CommitmentConfig<Field
     let setup_contribution_mode = SetupContributionMode::Direct;
     let (commitments, proof, setup) = {
         let t0 = Instant::now();
-        let setup = scheme.setup_prover(nv, num_polys).unwrap();
+        let setup = scheme.setup_prover(nv, num_polys, None).unwrap();
         let setup_expand_secs = t0.elapsed().as_secs_f64();
         let t_prepare = Instant::now();
         let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();

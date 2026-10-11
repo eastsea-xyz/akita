@@ -158,7 +158,7 @@ macro_rules! small_field_test {
                     let setup = scheme.setup_prover(
                         final_nv.max(PRE_NV),
                         2,
-                    )
+                    None,)
                     .expect("setup");
                     let prepared =
                         CpuBackend::DEFAULT.prepare_setup(&setup).expect("prepared");
@@ -343,7 +343,7 @@ macro_rules! small_field_test {
                     let setup = scheme.setup_prover(
                         final_nv.max(PRE_NV),
                         2,
-                    )
+                    None,)
                     .expect("setup");
                     let prepared =
                         CpuBackend::DEFAULT.prepare_setup(&setup).expect("prepared");
@@ -565,7 +565,7 @@ fn fp32_onehot_multi_group() {
         let pre_params = &pre_group_schedule.root.params;
         let pre_poly = grouped_poly(pre_params, 1);
 
-        let pre_setup = scheme.setup_prover(PRE_NV, 1).expect("pre setup");
+        let pre_setup = scheme.setup_prover(PRE_NV, 1, None).expect("pre setup");
         let pre_prepared = CpuBackend::DEFAULT
             .prepare_setup(&pre_setup)
             .expect("prepared");
@@ -599,7 +599,7 @@ fn fp32_onehot_multi_group() {
         let final_params = &multi_schedule.root.params;
         let final_poly = grouped_poly(final_params, 2);
 
-        let setup = scheme.setup_prover(FINAL_NV, 2).expect("setup");
+        let setup = scheme.setup_prover(FINAL_NV, 2, None).expect("setup");
         let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).expect("prepared");
         let stack =
             UniformProverStack::uniform(&CpuBackend::DEFAULT, &prepared, setup.expanded.as_ref())

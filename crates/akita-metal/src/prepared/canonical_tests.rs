@@ -188,6 +188,7 @@ fn canonical_matrix_growth_keeps_one_largest_prefix_and_checks_geometry() {
         SetupMatrixCapacity {
             num_field_elements: 4096,
         },
+        None,
     )
     .unwrap();
     let metal = MetalBackend::new(MetalExecutionPolicy::RequireMetal).unwrap();
@@ -222,6 +223,7 @@ fn canonical_matrix_preparation_submits_no_private_upload_blit() {
         SetupMatrixCapacity {
             num_field_elements: 1024,
         },
+        None,
     )
     .unwrap();
     let metal = MetalBackend::new(MetalExecutionPolicy::RequireMetal).unwrap();

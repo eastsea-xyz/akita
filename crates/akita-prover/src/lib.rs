@@ -21,7 +21,7 @@ use std::sync::OnceLock;
 
 pub use api::{
     commit, commit_setup_prefix, resolve_polynomial_group_layout, AkitaProverSetup, CommitOutput,
-    GroupContext, PreparedGroupProveOps, PreparedProverGroup,
+    GroupContext, PreparedGroupProveOps, PreparedProverGroup, SetupMatrixGenerator,
 };
 
 pub use backend::{

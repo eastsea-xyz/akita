@@ -72,6 +72,7 @@ where
         &self,
         max_num_vars: usize,
         max_num_batched_polys: usize,
+        matrix_generator: Option<&akita_prover::SetupMatrixGenerator<'_, Cfg::Field>>,
     ) -> Result<AkitaProverSetup<Cfg::Field>, AkitaError>
     where
         Cfg::Field: AkitaDeserialize<Context = ()>,
@@ -80,6 +81,7 @@ where
             &self.schedules,
             max_num_vars,
             max_num_batched_polys,
+            matrix_generator,
         )
     }
 

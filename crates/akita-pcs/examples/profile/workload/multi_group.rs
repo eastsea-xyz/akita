@@ -214,7 +214,7 @@ fn run_recursive_multi_group_onehot_with_proof_cfg<FF, const D: usize, Cfg, Proo
     ) = {
         let t0 = Instant::now();
         let mut setup = proof_scheme
-            .setup_prover(final_num_vars, total_polys)
+            .setup_prover(final_num_vars, total_polys, None)
             .unwrap();
         let setup_expand_secs = t0.elapsed().as_secs_f64();
         let t_prepare = Instant::now();

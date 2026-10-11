@@ -108,7 +108,9 @@ fn fp32_ext4_l2_pcs_roundtrip_and_stage2_rejections() {
             .map(|i| E::from_u64((i as u64).wrapping_mul(5).wrapping_add(1)))
             .collect::<Vec<_>>();
         let opening = onehot_opening_lagrange(&poly, &point);
-        let setup = scheme.setup_prover(NUM_VARS, 1).expect("L2 prover setup");
+        let setup = scheme
+            .setup_prover(NUM_VARS, 1, None)
+            .expect("L2 prover setup");
         let prepared = CpuBackend::DEFAULT
             .prepare_setup(&setup)
             .expect("prepared L2 setup");
@@ -275,7 +277,7 @@ fn fp32_nv20_shipped_terminal_route_roundtrip_and_rejections() {
             .collect::<Vec<_>>();
         let opening = onehot_opening_lagrange(&poly, &point);
         let setup = scheme
-            .setup_prover(NUM_VARS, 1)
+            .setup_prover(NUM_VARS, 1, None)
             .expect("terminal L2 prover setup");
         let prepared = CpuBackend::DEFAULT
             .prepare_setup(&setup)

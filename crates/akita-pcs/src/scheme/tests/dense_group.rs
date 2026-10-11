@@ -7,7 +7,9 @@ fn dense_group_commit_freezes_scalar_s_profile() {
     const NUM_VARS: usize = 16;
 
     let scheme = workspace_scheme::<DenseGroupCfg>().expect("workspace schedule artifact");
-    let setup = scheme.setup_prover(NUM_VARS, 1).expect("dense group setup");
+    let setup = scheme
+        .setup_prover(NUM_VARS, 1, None)
+        .expect("dense group setup");
     let prepared = CpuBackend::DEFAULT
         .prepare_setup(&setup)
         .expect("prepared dense group setup");

@@ -341,7 +341,7 @@ fn fp128_onehot_batched() {
             .map(|p| onehot_opening_lagrange(p, &pt))
             .collect();
 
-        let setup = scheme.setup_prover(nv, batch_size).unwrap();
+        let setup = scheme.setup_prover(nv, batch_size, None).unwrap();
         let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();
         let stack =
             UniformProverStack::uniform(&CpuBackend::DEFAULT, &prepared, setup.expanded.as_ref())
@@ -424,7 +424,7 @@ fn fp128_dense_batched() {
             .map(|e| dense_opening_lagrange(e, &pt))
             .collect();
 
-        let setup = scheme.setup_prover(nv, batch_size).unwrap();
+        let setup = scheme.setup_prover(nv, batch_size, None).unwrap();
         let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();
         let stack =
             UniformProverStack::uniform(&CpuBackend::DEFAULT, &prepared, setup.expanded.as_ref())
@@ -539,7 +539,7 @@ fn fp128_mixed_batched_uses_source_free_group_geometry() {
             MultilinearPolynomial::onehot(onehot_b),
         ];
 
-        let setup = scheme.setup_prover(NV, BATCH).unwrap();
+        let setup = scheme.setup_prover(NV, BATCH, None).unwrap();
         let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();
         let stack =
             UniformProverStack::uniform(&CpuBackend::DEFAULT, &prepared, setup.expanded.as_ref())
@@ -601,7 +601,7 @@ fn fp128_onehot_oversized_setup() {
         let pt = random_point(poly_nv, 0xcafe_0000 + poly_nv as u64);
         let expected_opening = onehot_opening_lagrange(&poly, &pt);
 
-        let setup = scheme.setup_prover(setup_nv, 1).unwrap();
+        let setup = scheme.setup_prover(setup_nv, 1, None).unwrap();
         let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();
         let stack =
             UniformProverStack::uniform(&CpuBackend::DEFAULT, &prepared, setup.expanded.as_ref())
@@ -682,7 +682,7 @@ fn fp128_dense_monomial_basis() {
         let pt = random_point(NV, 0xc0de_0000);
         let expected_opening = dense_opening_monomial(&evals, &pt);
 
-        let setup = scheme.setup_prover(NV, 1).unwrap();
+        let setup = scheme.setup_prover(NV, 1, None).unwrap();
         let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();
         let stack =
             UniformProverStack::uniform(&CpuBackend::DEFAULT, &prepared, setup.expanded.as_ref())

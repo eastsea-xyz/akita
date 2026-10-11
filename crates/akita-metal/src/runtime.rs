@@ -44,6 +44,7 @@ mod relation_setup;
 mod resources;
 mod rows;
 mod setup_contractions;
+pub(crate) mod setup_matrix;
 pub(crate) mod sparse_high_half;
 pub(crate) use setup_contractions::{SetupContractionInput, SetupContractionParams};
 mod witness_pack;
@@ -158,7 +159,9 @@ const KERNEL_SOURCE: &str = concat!(
     "\n",
     include_str!("kernels/sparse_high_half.metal"),
     "\n",
-    include_str!("kernels/setup_contractions.metal")
+    include_str!("kernels/setup_contractions.metal"),
+    "\n",
+    include_str!("kernels/setup_matrix.metal")
 );
 /// Largest D512 panel threadgroup; each GPU gets what its compiled pipeline
 /// allows (register pressure: 640 on M1 Max), rounded down to whole simdgroups.
@@ -1021,6 +1024,9 @@ struct RecursiveCommitResources {
 
 pub(crate) struct MetalRuntime {
     setup_contraction_pipeline: ComputePipelineState,
+    setup_matrix_pipeline: ComputePipelineState,
+    #[cfg(test)]
+    setup_matrix_sampling_pipeline: ComputePipelineState,
     digit_tree_library: metal::Library,
     digit_tree_pipelines: std::sync::Mutex<Option<std::sync::Arc<digit_tree::DigitTreePipelines>>>,
     device: Device,
@@ -1139,6 +1145,9 @@ impl MetalRuntime {
                 FP128_D64_DIGIT_ROWS_REDUCE_KERNEL_NAME,
             )?,
             setup_contraction_pipeline: pipeline("akita_fp128_setup_column_contractions")?,
+            setup_matrix_pipeline: pipeline("akita_fp128_setup_matrix")?,
+            #[cfg(test)]
+            setup_matrix_sampling_pipeline: pipeline("akita_fp128_setup_matrix_sampling_oracle")?,
             fp128_field_coefficient_packing_pipeline: pipeline(
                 FP128_FIELD_COEFFICIENT_PACKING_KERNEL_NAME,
             )?,

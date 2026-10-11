@@ -230,8 +230,10 @@ impl<F: Field> RingVec<F> {
             "coeff count not a multiple of D={D}"
         );
         self.coeffs
-            .chunks_exact(D)
-            .map(CyclotomicRing::from_slice)
+            .as_chunks::<D>()
+            .0
+            .iter()
+            .map(|coefficients| CyclotomicRing::from_coefficients(*coefficients))
             .collect()
     }
 
@@ -250,8 +252,10 @@ impl<F: Field> RingVec<F> {
         }
         Ok(self
             .coeffs
-            .chunks_exact(D)
-            .map(CyclotomicRing::from_slice)
+            .as_chunks::<D>()
+            .0
+            .iter()
+            .map(|coefficients| CyclotomicRing::from_coefficients(*coefficients))
             .collect())
     }
 

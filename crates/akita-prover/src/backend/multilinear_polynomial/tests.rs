@@ -66,6 +66,7 @@ fn multilinear_onehot_group_commit_matches_inner_kernel() {
         SetupMatrixCapacity {
             num_field_elements: 4096,
         },
+        None,
     )
     .unwrap();
     let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();

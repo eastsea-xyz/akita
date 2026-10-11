@@ -52,7 +52,7 @@ fn bench_dense_root_matvec_full_nv24_d256(c: &mut Criterion) {
         .root
         .params
         .clone();
-    let setup = scheme.setup_prover(NV, 1).unwrap();
+    let setup = scheme.setup_prover(NV, 1, None).unwrap();
     let total = setup.expanded.shared_matrix.num_field_elements() / D;
     let ntt_shared = prepare_ntt_cache(
         setup

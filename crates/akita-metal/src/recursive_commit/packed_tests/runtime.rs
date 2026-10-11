@@ -34,6 +34,7 @@ fn raw_packed_parity<const D: usize>() {
         SetupMatrixCapacity {
             num_field_elements: 4 * 3 * D,
         },
+        None,
     )
     .unwrap();
     let backend = MetalBackend::new(MetalExecutionPolicy::RequireMetal).unwrap();
@@ -169,6 +170,7 @@ fn shared_spectrum_explicit_view_rejects_bad_strides_before_upload() {
         SetupMatrixCapacity {
             num_field_elements: 4 * D,
         },
+        None,
     )
     .unwrap();
     let backend = MetalBackend::new(MetalExecutionPolicy::RequireMetal).unwrap();

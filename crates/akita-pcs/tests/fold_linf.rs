@@ -54,7 +54,7 @@ fn prove_fold_linf_grind_onehot_fixture(num_vars: usize, seed: u64) -> FoldLinfG
         BasisMode::Lagrange,
     );
 
-    let setup = scheme.setup_prover(num_vars, 1).expect("setup");
+    let setup = scheme.setup_prover(num_vars, 1, None).expect("setup");
     let prepared = CpuBackend::DEFAULT
         .prepare_setup(&setup)
         .expect("prepare setup");
@@ -326,7 +326,7 @@ fn logging_transcript_event_stream_equality_with_fold_linf_grind() {
         let point = random_point(num_vars, 0x71_71);
         let opening = opening_from_poly_for_layout(&poly, &point, &layout, BasisMode::Lagrange);
 
-        let setup = scheme.setup_prover(num_vars, 1).expect("setup");
+        let setup = scheme.setup_prover(num_vars, 1, None).expect("setup");
         let prepared = CpuBackend::DEFAULT
             .prepare_setup(&setup)
             .expect("prepare setup");

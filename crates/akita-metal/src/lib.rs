@@ -67,6 +67,8 @@ mod ring_switch;
 )]
 mod runtime;
 #[cfg(target_os = "macos")]
+mod setup_matrix;
+#[cfg(target_os = "macos")]
 mod sparse_high_half;
 #[cfg(target_os = "macos")]
 mod witness_pack;
@@ -79,6 +81,8 @@ pub use packed_onehot::PackedOneHotCommitView;
 pub use prepared::MetalPreparedSetup;
 #[cfg(target_os = "macos")]
 pub use runtime::{MetalDeviceCapabilities, MetalOneHotKernel};
+#[cfg(target_os = "macos")]
+pub use setup_matrix::{MetalSetupMatrixMetrics, MetalSetupMatrixOutput};
 
 #[cfg(not(target_os = "macos"))]
 mod unsupported {

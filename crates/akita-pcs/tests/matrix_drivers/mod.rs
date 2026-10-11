@@ -59,7 +59,7 @@ where
         );
 
         let setup = scheme
-            .setup_prover(FINAL_NV, FINAL_GROUP_SIZE)
+            .setup_prover(FINAL_NV, FINAL_GROUP_SIZE, None)
             .expect("recursive direct setup");
         assert!(
             !setup.prefix_slots.is_empty(),
@@ -181,7 +181,7 @@ pub(super) fn prove_verify_dense_roundtrip_with_evals<Cfg>(
         // Independent oracle: raw evaluations folded against the point.
         let expected_opening = dense_opening_lagrange(&evals, &pt);
 
-        let setup = scheme.setup_prover(nv, 1).unwrap();
+        let setup = scheme.setup_prover(nv, 1, None).unwrap();
         let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();
         let stack = akita_prover::UniformProverStack::uniform(
             &CpuBackend::DEFAULT,
@@ -257,7 +257,7 @@ where
         // Independent oracle: sum of Lagrange weights at the hot indices.
         let expected_opening = onehot_opening_lagrange(&poly, &pt);
 
-        let setup = scheme.setup_prover(nv, 1).unwrap();
+        let setup = scheme.setup_prover(nv, 1, None).unwrap();
         let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();
         let stack = akita_prover::UniformProverStack::uniform(
             &CpuBackend::DEFAULT,
@@ -328,7 +328,7 @@ where
 {
     let scheme = load_workspace_scheme::<Cfg>().expect("workspace schedule artifact");
     for &final_nv in final_nvs {
-        let setup = scheme.setup_prover(final_nv.max(PRE_NV), 2).unwrap();
+        let setup = scheme.setup_prover(final_nv.max(PRE_NV), 2, None).unwrap();
         let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();
         let stack = akita_prover::UniformProverStack::uniform(
             &CpuBackend::DEFAULT,
@@ -478,7 +478,7 @@ where
         .expect("one-hot roundtrip requires a unit-one-hot config");
     let scheme = load_workspace_scheme::<Cfg>().expect("workspace schedule artifact");
     for &final_nv in final_nvs {
-        let setup = scheme.setup_prover(final_nv.max(PRE_NV), 2).unwrap();
+        let setup = scheme.setup_prover(final_nv.max(PRE_NV), 2, None).unwrap();
         let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();
         let stack = akita_prover::UniformProverStack::uniform(
             &CpuBackend::DEFAULT,

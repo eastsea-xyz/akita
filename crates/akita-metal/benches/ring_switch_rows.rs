@@ -24,6 +24,7 @@ fn main() {
         SetupMatrixCapacity {
             num_field_elements: akita_error::checked::product([columns, num_rows, D]).unwrap(),
         },
+        None,
     )
     .unwrap();
     let digits = (0..columns)

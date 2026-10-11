@@ -536,6 +536,7 @@ mod tests {
             SetupMatrixCapacity {
                 num_field_elements: max_flat_coefficients,
             },
+            None,
         )
         .unwrap();
         let prepared = CpuBackend::DEFAULT

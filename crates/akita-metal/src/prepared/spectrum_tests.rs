@@ -28,6 +28,7 @@ fn assert_linear_prefix_shared<const D: usize>() {
         SetupMatrixCapacity {
             num_field_elements: 24 * D,
         },
+        None,
     )
     .unwrap();
     let metal = MetalBackend::new(MetalExecutionPolicy::RequireMetal).unwrap();
@@ -64,6 +65,7 @@ fn assert_growth_and_borrowers<const D: usize>() {
         SetupMatrixCapacity {
             num_field_elements: 24 * D,
         },
+        None,
     )
     .unwrap();
     let metal = MetalBackend::new(MetalExecutionPolicy::RequireMetal).unwrap();
@@ -169,6 +171,7 @@ fn assert_mixed_raw_and_packed<const D: usize>() {
         SetupMatrixCapacity {
             num_field_elements: MAX_RINGS * D,
         },
+        None,
     )
     .unwrap();
     let cpu = CpuBackend::DEFAULT;

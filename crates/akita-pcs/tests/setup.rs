@@ -132,7 +132,7 @@ where
         BasisMode::Lagrange,
     );
 
-    let setup = scheme.setup_prover(setup_nv, setup_polys).unwrap();
+    let setup = scheme.setup_prover(setup_nv, setup_polys, None).unwrap();
     let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();
     let stack = akita_prover::UniformProverStack::uniform(
         &CpuBackend::DEFAULT,
@@ -141,7 +141,7 @@ where
     )
     .expect("stack");
     let verifier_setup_source = scheme
-        .setup_prover(setup_nv + 1, setup_polys + 1)
+        .setup_prover(setup_nv + 1, setup_polys + 1, None)
         .expect("larger verifier materialization");
     assert_eq!(
         setup.expanded.descriptor().setup_seed,
@@ -271,7 +271,7 @@ where
     let pt = random_point(poly_nv, 0xcafe_0001 + poly_nv as u64);
     let expected_opening = onehot_lagrange_opening(&indices, k, &pt);
 
-    let setup = scheme.setup_prover(setup_nv, setup_polys).unwrap();
+    let setup = scheme.setup_prover(setup_nv, setup_polys, None).unwrap();
     let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();
     let stack = akita_prover::UniformProverStack::uniform(
         &CpuBackend::DEFAULT,
@@ -280,7 +280,7 @@ where
     )
     .expect("stack");
     let verifier_setup_source = scheme
-        .setup_prover(setup_nv + 1, setup_polys + 1)
+        .setup_prover(setup_nv + 1, setup_polys + 1, None)
         .expect("larger verifier materialization");
     assert_eq!(
         setup.expanded.descriptor().setup_seed,
@@ -451,7 +451,7 @@ fn run_dense_batched_e2e<Cfg, const D: usize>(
         })
         .collect();
 
-    let setup = scheme.setup_prover(setup_nv, setup_polys).unwrap();
+    let setup = scheme.setup_prover(setup_nv, setup_polys, None).unwrap();
     let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();
     let stack = akita_prover::UniformProverStack::uniform(
         &CpuBackend::DEFAULT,
@@ -565,7 +565,7 @@ fn run_onehot_batched_e2e<Cfg, const D: usize>(
         .map(|(_, indices)| onehot_lagrange_opening(indices, k, &pt))
         .collect();
 
-    let setup = scheme.setup_prover(setup_nv, setup_polys).unwrap();
+    let setup = scheme.setup_prover(setup_nv, setup_polys, None).unwrap();
     let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();
     let stack = akita_prover::UniformProverStack::uniform(
         &CpuBackend::DEFAULT,

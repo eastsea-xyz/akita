@@ -31,6 +31,7 @@ fn all_widths<const D: usize>() {
         SetupMatrixCapacity {
             num_field_elements: 3 * 4 * 3 * D,
         },
+        None,
     )
     .unwrap();
     let cpu = CpuBackend::DEFAULT;
@@ -100,6 +101,7 @@ fn tensor_tails<const D: usize>() {
         SetupMatrixCapacity {
             num_field_elements: 2 * 4 * 3 * D,
         },
+        None,
     )
     .unwrap();
     let cpu = CpuBackend::DEFAULT;
@@ -163,6 +165,7 @@ fn packed_recursive_commit_asymmetric_basis_one_128_planes_matches_cpu() {
         SetupMatrixCapacity {
             num_field_elements: 128 * D,
         },
+        None,
     )
     .unwrap();
     let witness = RecursiveWitnessFlat::from_i8_digits(
@@ -206,6 +209,7 @@ fn packed_recursive_commit_invalid_second_source_rejects_before_matrix_work() {
         SetupMatrixCapacity {
             num_field_elements: 4 * D,
         },
+        None,
     )
     .unwrap();
     let good = RecursiveWitnessFlat::from_i8_digits(vec![1; D]);
@@ -238,6 +242,7 @@ fn packed_recursive_commit_i16_basis_preserves_require_and_prefer_policy() {
         SetupMatrixCapacity {
             num_field_elements: 4 * D,
         },
+        None,
     )
     .unwrap();
     let witness = RecursiveWitnessFlat::from_i8_digits((0..D).map(|i| i as i8).collect());

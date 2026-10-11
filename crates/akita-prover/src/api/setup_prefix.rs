@@ -312,6 +312,7 @@ mod tests {
             SetupMatrixCapacity {
                 num_field_elements: setup_capacity_for(level_params, n_prefix).max(1),
             },
+            None,
         )
         .expect("setup")
     }
@@ -332,6 +333,7 @@ mod tests {
             SetupMatrixCapacity {
                 num_field_elements: natural_len,
             },
+            None,
         )
         .expect("setup");
         let available_field_len = setup.expanded.shared_matrix().as_field_slice().len();

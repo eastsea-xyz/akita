@@ -392,6 +392,7 @@ mod tests {
             SetupMatrixCapacity {
                 num_field_elements: matrix_fields,
             },
+            None,
         )
         .unwrap();
         let cpu_prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();
@@ -511,6 +512,7 @@ mod tests {
             SetupMatrixCapacity {
                 num_field_elements: 1 << 20,
             },
+            None,
         )
         .unwrap();
 

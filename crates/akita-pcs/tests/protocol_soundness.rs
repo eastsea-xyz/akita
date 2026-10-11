@@ -219,7 +219,7 @@ where
     #[cfg(feature = "disk-persistence")]
     purge_setup_cache(nv);
 
-    let setup = scheme.setup_prover(nv, 1).unwrap();
+    let setup = scheme.setup_prover(nv, 1, None).unwrap();
     let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();
     let stack = akita_prover::UniformProverStack::uniform(
         &CpuBackend::DEFAULT,
@@ -427,7 +427,7 @@ fn trace_internalization_rejects_tampered_recursive_fold_handle() {
         #[cfg(feature = "disk-persistence")]
         purge_setup_cache(NV);
 
-        let setup = scheme.setup_prover(NV, 2).unwrap();
+        let setup = scheme.setup_prover(NV, 2, None).unwrap();
         let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();
         let stack = akita_prover::UniformProverStack::uniform(
             &CpuBackend::DEFAULT,
@@ -565,7 +565,7 @@ fn adaptive_dense_tiny_roots_and_setup_capacities_are_rejected() {
             akita_error::AkitaError::UnsupportedSchedule(_)
         ));
         let setup_err = scheme
-            .setup_prover(nv, 1)
+            .setup_prover(nv, 1, None)
             .expect_err("tiny capacity must not produce a prover setup");
         assert!(
             matches!(setup_err, akita_error::AkitaError::InvalidSetup(_)),
@@ -626,7 +626,7 @@ fn batched_onehot_same_point_rejects_tampered_root_stage1_range_image_evaluation
         purge_setup_cache(nv);
 
         let setup = scheme
-            .setup_prover(nv, SAME_POINT_ONEHOT_BATCH_SIZE)
+            .setup_prover(nv, SAME_POINT_ONEHOT_BATCH_SIZE, None)
             .unwrap();
         let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();
         let stack = akita_prover::UniformProverStack::uniform(
@@ -759,7 +759,7 @@ fn fp32_ext4_rejects_wrong_opening_and_tampered_or_missing_terminal_eor() {
             .collect();
 
         let setup = scheme
-            .setup_prover(EXT4_NV, EXT4_BATCH)
+            .setup_prover(EXT4_NV, EXT4_BATCH, None)
             .expect("fp32 prover setup");
         let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).expect("prepared");
         let stack = akita_prover::UniformProverStack::uniform(
@@ -1048,7 +1048,7 @@ fn batched_dense_rejects_wrong_opening_and_oversized_payload() {
             dense_lagrange_opening_from_evals(&evals_b, &point),
         ];
 
-        let setup = scheme.setup_prover(NV, 2).expect("setup");
+        let setup = scheme.setup_prover(NV, 2, None).expect("setup");
         let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).expect("prepared");
         let stack = akita_prover::UniformProverStack::uniform(
             &CpuBackend::DEFAULT,
@@ -1211,7 +1211,7 @@ fn batched_onehot_terminal_structure_and_truncated_recursive_suffix() {
             })
             .collect();
 
-        let setup = scheme.setup_prover(NV, 2).expect("setup");
+        let setup = scheme.setup_prover(NV, 2, None).expect("setup");
         let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).expect("prepared");
         let stack = akita_prover::UniformProverStack::uniform(
             &CpuBackend::DEFAULT,

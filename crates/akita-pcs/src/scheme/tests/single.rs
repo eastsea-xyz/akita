@@ -89,7 +89,7 @@ fn verify_rejects_wrong_opening() {
 
     let (poly, evals) = make_dense_poly(num_vars);
 
-    let setup = scheme.setup_prover(num_vars, 1).unwrap();
+    let setup = scheme.setup_prover(num_vars, 1, None).unwrap();
     let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();
     let stack = akita_prover::UniformProverStack::uniform(
         &CpuBackend::DEFAULT,

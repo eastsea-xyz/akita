@@ -47,7 +47,7 @@ pub(crate) fn recursive_multi_group_round_trip<BaseCfg>(
         on_schedule(&schedule);
 
         let setup = recursive_scheme
-            .setup_prover(FINAL_NV, TOTAL_GROUP_SIZE)
+            .setup_prover(FINAL_NV, TOTAL_GROUP_SIZE, None)
             .expect("recursive setup");
         assert!(
             !setup.prefix_slots.is_empty(),

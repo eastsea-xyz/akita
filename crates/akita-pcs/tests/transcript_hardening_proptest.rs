@@ -49,7 +49,7 @@ fn logged_dense_round_trip(shape_index: usize, basis_mode: BasisMode, seed: u64)
         .map(|poly| opening_from_poly_for_layout(*poly, &opening_point, &layout, basis_mode))
         .collect();
 
-    let setup = scheme.setup_prover(num_vars, total_claims).unwrap();
+    let setup = scheme.setup_prover(num_vars, total_claims, None).unwrap();
     let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();
     let stack = akita_prover::UniformProverStack::uniform(
         &CpuBackend::DEFAULT,

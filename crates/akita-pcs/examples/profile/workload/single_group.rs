@@ -362,7 +362,7 @@ pub(crate) fn run_dense_for<FF, const D: usize, Cfg: CommitmentConfig<Field = FF
     );
     let t0 = Instant::now();
     let setup = scheme
-        .setup_prover(RootPolyShape::<FF, D>::num_vars(&poly), 1)
+        .setup_prover(RootPolyShape::<FF, D>::num_vars(&poly), 1, None)
         .unwrap();
     let setup_expand_secs = t0.elapsed().as_secs_f64();
     let t_prepare = Instant::now();
@@ -449,7 +449,7 @@ pub(crate) fn run_onehot<FF, const D: usize, Cfg: CommitmentConfig<Field = FF>>(
     let pt = random_claim_point::<FF, Cfg::ExtField>(nv, &mut rng);
     let opening = onehot_lagrange_opening::<FF, Cfg::ExtField, u8>(&onehot_poly, &pt);
     let t0 = Instant::now();
-    let setup = scheme.setup_prover(nv, 1).unwrap();
+    let setup = scheme.setup_prover(nv, 1, None).unwrap();
     let setup_expand_secs = t0.elapsed().as_secs_f64();
     let t_prepare = Instant::now();
     let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();

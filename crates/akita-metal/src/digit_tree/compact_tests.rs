@@ -81,6 +81,7 @@ fn compact_tree_lut_rounds_materialization_and_resident_bind_match_cpu() {
         SetupMatrixCapacity {
             num_field_elements: 512,
         },
+        None,
     )
     .unwrap();
     let metal = MetalBackend::new(MetalExecutionPolicy::RequireMetal).unwrap();
@@ -256,6 +257,7 @@ fn compact_tree_rejects_bad_source_and_missing_second_round_lut() {
         SetupMatrixCapacity {
             num_field_elements: 512,
         },
+        None,
     )
     .unwrap();
     let metal = MetalBackend::new(MetalExecutionPolicy::RequireMetal).unwrap();
@@ -431,6 +433,7 @@ fn compact_tree_four_row_domain_preserves_cpu_proof_and_nonce() {
         SetupMatrixCapacity {
             num_field_elements: 512,
         },
+        None,
     )
     .unwrap();
     let cpu = CpuBackend::DEFAULT;

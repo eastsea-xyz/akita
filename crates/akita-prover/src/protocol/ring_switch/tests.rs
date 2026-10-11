@@ -410,6 +410,7 @@ fn with_reduced_setup<R>(
         SetupMatrixCapacity {
             num_field_elements: setup_coefficients,
         },
+        None,
     )
     .expect("prover setup");
     let backend = CpuBackend::DEFAULT;

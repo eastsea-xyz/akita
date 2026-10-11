@@ -80,7 +80,9 @@ fn scheme_owns_one_catalog_for_setup_and_row_resolution() {
         akita_config::SetupRequirements::from_catalog::<Cfg>(scheme.schedules(), 14, 1)
             .map(|requirements| requirements.matrix_capacity)
             .expect("catalog setup capacity");
-    let setup = scheme.setup_prover(14, 1).expect("catalog-backed setup");
+    let setup = scheme
+        .setup_prover(14, 1, None)
+        .expect("catalog-backed setup");
     assert!(
         setup.expanded.shared_matrix().num_field_elements() >= expected_capacity.num_field_elements,
         "setup must cover the exact catalog-derived matrix requirement"
@@ -261,7 +263,7 @@ fn make_verify_fixture(num_vars: usize) -> VerifyFixture {
     let full_num_vars = layout.position_index_bits() + layout.block_index_bits() + alpha;
 
     let (poly, evals) = make_dense_poly(full_num_vars);
-    let setup = scheme.setup_prover(full_num_vars, 1).unwrap();
+    let setup = scheme.setup_prover(full_num_vars, 1, None).unwrap();
     let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();
     let stack = akita_prover::UniformProverStack::uniform(
         &CpuBackend::DEFAULT,

@@ -23,6 +23,7 @@ fn recursive_commit_reuses_packed_input_before_first_opening_fold() {
         SetupMatrixCapacity {
             num_field_elements: 4 * D,
         },
+        None,
     )
     .unwrap();
     let witness =

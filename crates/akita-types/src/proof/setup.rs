@@ -386,23 +386,45 @@ struct SetupSeedPageXof {
 impl SetupSeedPageXof {
     fn new<F: Field + CanonicalEncoding>(id: &AkitaSetupSeed, page_index: usize) -> Self {
         let mut xof = Shake256::default();
-        absorb_len_prefixed(&mut xof, b"domain", PUBLIC_MATRIX_DOMAIN);
-        let derivation_tag = match id.derivation {
-            PublicMatrixDerivation::Shake256PagedV1 => PUBLIC_MATRIX_DERIVATION_TAG,
-        };
-        absorb_len_prefixed(&mut xof, b"derivation", derivation_tag);
-        absorb_len_prefixed(
-            &mut xof,
-            b"page_field_elements",
-            &(id.derivation.page_field_elements() as u64).to_le_bytes(),
-        );
-        absorb_len_prefixed(&mut xof, b"seed", &id.seed);
-        absorb_len_prefixed(&mut xof, b"field", &field_modulus_bytes::<F>());
-        absorb_len_prefixed(&mut xof, b"page", &(page_index as u64).to_le_bytes());
+        encode_public_matrix_page::<F>(id, page_index as u64, |bytes| xof.update(bytes));
         Self {
             reader: xof.finalize_xof(),
         }
     }
+}
+
+/// Canonical bytes absorbed by SHAKE256 for one public-matrix page.
+///
+/// This shares the encoder used by CPU derivation. The current policy emits
+/// exactly 277 bytes, independent of the requested matrix prefix or ring shape.
+#[must_use]
+pub fn public_matrix_page_xof_input<F: Field + CanonicalEncoding>(
+    id: &AkitaSetupSeed,
+    page_index: u64,
+) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(277);
+    encode_public_matrix_page::<F>(id, page_index, |part| bytes.extend_from_slice(part));
+    bytes
+}
+
+fn encode_public_matrix_page<F: Field + CanonicalEncoding>(
+    id: &AkitaSetupSeed,
+    page_index: u64,
+    mut emit: impl FnMut(&[u8]),
+) {
+    absorb_len_prefixed(&mut emit, b"domain", PUBLIC_MATRIX_DOMAIN);
+    let derivation_tag = match id.derivation {
+        PublicMatrixDerivation::Shake256PagedV1 => PUBLIC_MATRIX_DERIVATION_TAG,
+    };
+    absorb_len_prefixed(&mut emit, b"derivation", derivation_tag);
+    absorb_len_prefixed(
+        &mut emit,
+        b"page_field_elements",
+        &(id.derivation.page_field_elements() as u64).to_le_bytes(),
+    );
+    absorb_len_prefixed(&mut emit, b"seed", &id.seed);
+    absorb_len_prefixed(&mut emit, b"field", &field_modulus_bytes::<F>());
+    absorb_len_prefixed(&mut emit, b"page", &page_index.to_le_bytes());
 }
 
 fn field_modulus_bytes<F: Field + CanonicalEncoding>() -> [u8; 32] {
@@ -435,11 +457,11 @@ impl RngCore for SetupSeedPageXof {
 
 impl CryptoRng for SetupSeedPageXof {}
 
-fn absorb_len_prefixed(xof: &mut Shake256, label: &[u8], data: &[u8]) {
-    xof.update(&(label.len() as u64).to_le_bytes());
-    xof.update(label);
-    xof.update(&(data.len() as u64).to_le_bytes());
-    xof.update(data);
+fn absorb_len_prefixed(emit: &mut impl FnMut(&[u8]), label: &[u8], data: &[u8]) {
+    emit(&(label.len() as u64).to_le_bytes());
+    emit(label);
+    emit(&(data.len() as u64).to_le_bytes());
+    emit(data);
 }
 
 impl Valid for PublicMatrixDerivation {

@@ -96,6 +96,7 @@ fn assert_direct_range_matches_cpu(basis: usize) {
         SetupMatrixCapacity {
             num_field_elements: 512,
         },
+        None,
     )
     .unwrap();
     let digits = digit_witness(basis);

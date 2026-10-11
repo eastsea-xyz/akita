@@ -19,14 +19,17 @@ fn setup_capacity(num_ring_elements: usize) -> SetupMatrixCapacity {
 }
 
 pub(super) fn prepared() -> CpuPreparedSetup<F> {
-    let setup = AkitaProverSetup::<F>::generate_with_capacity(8, 1, setup_capacity(D)).unwrap();
+    let setup =
+        AkitaProverSetup::<F>::generate_with_capacity(8, 1, setup_capacity(D), None).unwrap();
     CpuBackend::DEFAULT.prepare_setup(&setup).unwrap()
 }
 
 #[test]
 fn cpu_prepared_setup_identity_rejects_mismatched_setup() {
-    let setup_a = AkitaProverSetup::<F>::generate_with_capacity(8, 1, setup_capacity(D)).unwrap();
-    let setup_b = AkitaProverSetup::<F>::generate_with_capacity(9, 1, setup_capacity(D)).unwrap();
+    let setup_a =
+        AkitaProverSetup::<F>::generate_with_capacity(8, 1, setup_capacity(D), None).unwrap();
+    let setup_b =
+        AkitaProverSetup::<F>::generate_with_capacity(9, 1, setup_capacity(D), None).unwrap();
     let prepared = CpuBackend::DEFAULT.prepare_setup(&setup_a).unwrap();
 
     CpuBackend::DEFAULT
@@ -42,8 +45,10 @@ fn cpu_prepared_setup_identity_rejects_mismatched_setup() {
 
 #[test]
 fn cpu_prepared_setup_identity_accepts_equivalent_setup() {
-    let setup_a = AkitaProverSetup::<F>::generate_with_capacity(8, 1, setup_capacity(D)).unwrap();
-    let setup_b = AkitaProverSetup::<F>::generate_with_capacity(8, 1, setup_capacity(D)).unwrap();
+    let setup_a =
+        AkitaProverSetup::<F>::generate_with_capacity(8, 1, setup_capacity(D), None).unwrap();
+    let setup_b =
+        AkitaProverSetup::<F>::generate_with_capacity(8, 1, setup_capacity(D), None).unwrap();
     assert!(!Arc::ptr_eq(&setup_a.expanded, &setup_b.expanded));
 
     let prepared = CpuBackend::DEFAULT.prepare_setup(&setup_a).unwrap();
@@ -71,7 +76,8 @@ fn cpu_prepared_setup_reports_checked_crt_capacity_profile() {
 
 #[test]
 fn prepare_setup_starts_with_empty_ntt_cache() {
-    let setup = AkitaProverSetup::<F>::generate_with_capacity(8, 1, setup_capacity(D)).unwrap();
+    let setup =
+        AkitaProverSetup::<F>::generate_with_capacity(8, 1, setup_capacity(D), None).unwrap();
     let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).expect("prepared");
     assert_eq!(prepared.shared_ntt_cache_bytes(), 0);
     assert!(prepared.shared_ntt.lock().unwrap().is_empty());
@@ -79,7 +85,8 @@ fn prepare_setup_starts_with_empty_ntt_cache() {
 
 #[test]
 fn cpu_prepared_setup_builds_only_requested_ntt_slots() {
-    let setup = AkitaProverSetup::<F>::generate_with_capacity(8, 1, setup_capacity(D)).unwrap();
+    let setup =
+        AkitaProverSetup::<F>::generate_with_capacity(8, 1, setup_capacity(D), None).unwrap();
     let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).expect("prepared");
     let partial_key = NttCacheKey {
         ring_d: D,
@@ -104,7 +111,8 @@ fn cpu_prepared_setup_builds_only_requested_ntt_slots() {
 
 #[test]
 fn concurrent_same_key_ntt_warm_builds_once() {
-    let setup = AkitaProverSetup::<F>::generate_with_capacity(8, 1, setup_capacity(D)).unwrap();
+    let setup =
+        AkitaProverSetup::<F>::generate_with_capacity(8, 1, setup_capacity(D), None).unwrap();
     let prepared = CpuBackend::DEFAULT
         .prepare_expanded(setup.expanded.clone())
         .expect("empty prepared setup");

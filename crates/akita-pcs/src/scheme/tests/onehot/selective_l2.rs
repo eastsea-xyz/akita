@@ -27,7 +27,7 @@ fn selective_l2_proof_rejects_transcript_mutations() {
         })
         .collect();
 
-    let setup = scheme.setup_prover(NV, BATCH_SIZE).expect("L2 setup");
+    let setup = scheme.setup_prover(NV, BATCH_SIZE, None).expect("L2 setup");
     let prepared = CpuBackend::DEFAULT
         .prepare_setup(&setup)
         .expect("prepared L2 setup");

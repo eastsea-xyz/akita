@@ -659,6 +659,7 @@ mod lane_residency_tests {
             SetupMatrixCapacity {
                 num_field_elements: POSITIONS * D,
             },
+            None,
         )
         .unwrap();
         let cpu = CpuBackend::DEFAULT;

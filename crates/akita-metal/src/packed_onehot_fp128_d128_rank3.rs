@@ -329,6 +329,7 @@ mod tests {
             SetupMatrixCapacity {
                 num_field_elements: INNER_RANK * positions_per_block * RING_D,
             },
+            None,
         )
         .unwrap();
 

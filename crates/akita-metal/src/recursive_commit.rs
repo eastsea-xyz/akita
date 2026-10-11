@@ -262,6 +262,7 @@ mod tests {
             SetupMatrixCapacity {
                 num_field_elements: plan.n_a * plan.num_positions_per_block * num_digits_inner * D,
             },
+            None,
         )
         .unwrap();
         let witnesses = [random_witness::<D>(19, 17), random_witness::<D>(70, 91)];
@@ -354,6 +355,7 @@ mod tests {
             SetupMatrixCapacity {
                 num_field_elements: 2 * D,
             },
+            None,
         )
         .unwrap();
         let witness = random_witness::<D>(2, 21);
@@ -404,6 +406,7 @@ mod tests {
             SetupMatrixCapacity {
                 num_field_elements: 2 * D,
             },
+            None,
         )
         .unwrap();
         let source = DensePoly::from_ring_coeffs::<D>(vec![

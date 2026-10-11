@@ -183,7 +183,7 @@ fn fixed_root_packing_round_trips_in_both_bases() {
             let polynomial =
                 akita_prover::MultilinearPolynomial::<PackingField, usize>::dense(polynomial);
 
-            let mut setup = scheme.setup_prover(num_vars, 1).unwrap();
+            let mut setup = scheme.setup_prover(num_vars, 1, None).unwrap();
             let setup_prefix = row.schedule().recursive_folds[0]
                 .params
                 .setup_prefix()

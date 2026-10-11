@@ -151,7 +151,8 @@ mod tests {
 
     fn empty_prepared() -> CpuPreparedSetup<F> {
         let setup =
-            AkitaProverSetup::<F>::generate_with_capacity(8, 1, setup_envelope(6 * D)).unwrap();
+            AkitaProverSetup::<F>::generate_with_capacity(8, 1, setup_envelope(6 * D), None)
+                .unwrap();
         CpuBackend::DEFAULT
             .prepare_expanded(setup.expanded)
             .expect("empty prepared setup")

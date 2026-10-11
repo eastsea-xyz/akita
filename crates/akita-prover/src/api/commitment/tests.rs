@@ -138,6 +138,7 @@ fn commit_level_params_reject_log_basis_above_i8_range() {
         SetupMatrixCapacity {
             num_field_elements: D,
         },
+        None,
     )
     .unwrap()
     .expanded;
@@ -184,6 +185,7 @@ fn commit_level_params_do_not_charge_unused_shared_d_footprint() {
         SetupMatrixCapacity {
             num_field_elements: commit_only_fields,
         },
+        None,
     )
     .unwrap()
     .expanded;
@@ -458,6 +460,7 @@ fn s1_matches_real_unsliced_commitment_pipeline() {
         SetupMatrixCapacity {
             num_field_elements: 2_000_000,
         },
+        None,
     )
     .expect("deterministic setup");
     let prepared = CpuBackend::DEFAULT
@@ -586,6 +589,7 @@ fn commitment_bytes_ignore_opening_method_and_profiles_reject_tensor_sources() {
         SetupMatrixCapacity {
             num_field_elements: 2_000_000,
         },
+        None,
     )
     .unwrap();
     let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();

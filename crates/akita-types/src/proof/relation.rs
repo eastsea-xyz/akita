@@ -889,19 +889,18 @@ where
     F: Field + CanonicalEncoding,
     E: Field + MulBaseUnreduced<F>,
 {
-    if !coeffs.len().is_multiple_of(D) {
+    if D == 0 || !coeffs.len().is_multiple_of(D) {
         return Err(AkitaError::InvalidSize {
             expected: D,
             actual: coeffs.len(),
         });
     }
     let alpha_pows = scalar_powers(alpha, D);
-    for row in coeffs.chunks_exact(D) {
+    for row in coeffs.as_chunks::<D>().0 {
         if *row_idx >= eq_tau1.len() {
             return Ok(());
         }
-        let coefficients: [F; D] = row.try_into().map_err(|_| AkitaError::InvalidProof)?;
-        let ring = CyclotomicRing::from_coefficients(coefficients);
+        let ring = CyclotomicRing::from_coefficients(*row);
         *acc += eq_tau1[*row_idx] * eval_ring_at_pows_fast(&ring, &alpha_pows);
         *row_idx += 1;
     }

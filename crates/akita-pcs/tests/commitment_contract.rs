@@ -228,8 +228,9 @@ fn custom_commit_source_runs_unified_explicit_commit() {
         akita_config::SetupRequirements::from_catalog::<Cfg>(&schedules, CONTRACT_NUM_VARS, 1)
             .map(|requirements| requirements.matrix_capacity)
             .expect("envelope");
-    let setup = AkitaProverSetup::<F>::generate_with_capacity(CONTRACT_NUM_VARS, 1, setup_envelope)
-        .expect("setup");
+    let setup =
+        AkitaProverSetup::<F>::generate_with_capacity(CONTRACT_NUM_VARS, 1, setup_envelope, None)
+            .expect("setup");
     let contract_backend = ContractCommitBackend;
     let prepared = contract_backend.prepare_setup(&setup).expect("prepared");
     let expanded = setup.expanded.as_ref();

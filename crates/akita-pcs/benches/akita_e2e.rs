@@ -125,10 +125,16 @@ fn bench_dense_phases<const D: usize, Cfg: CommitmentConfig<Field = F, ExtField 
     configure_group(&mut group, nv);
 
     group.bench_function("setup", |b| {
-        b.iter(|| black_box(scheme.setup_prover(black_box(nv), black_box(1)).unwrap()))
+        b.iter(|| {
+            black_box(
+                scheme
+                    .setup_prover(black_box(nv), black_box(1), None)
+                    .unwrap(),
+            )
+        })
     });
 
-    let setup = scheme.setup_prover(nv, 1).unwrap();
+    let setup = scheme.setup_prover(nv, 1, None).unwrap();
     let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();
     let stack = akita_prover::UniformProverStack::uniform(
         &CpuBackend::DEFAULT,
@@ -379,7 +385,7 @@ fn bench_onehot_phases<Cfg: CommitmentConfig<Field = F, ExtField = F>>(
     let pt = random_point(nv);
     let opening = multilinear_eval(&dense_evals, &pt).unwrap();
 
-    let setup = scheme.setup_prover(nv, 1).unwrap();
+    let setup = scheme.setup_prover(nv, 1, None).unwrap();
     let prepared = CpuBackend::DEFAULT.prepare_setup(&setup).unwrap();
     let stack = akita_prover::UniformProverStack::uniform(
         &CpuBackend::DEFAULT,

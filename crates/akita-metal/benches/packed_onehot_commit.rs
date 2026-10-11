@@ -74,6 +74,7 @@ fn main() {
         SetupMatrixCapacity {
             num_field_elements: n_a * positions_per_block * ring_d,
         },
+        None,
     )
     .unwrap();
     let backend = MetalBackend::new(MetalExecutionPolicy::RequireMetal).unwrap();

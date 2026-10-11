@@ -99,9 +99,10 @@ pub use ring_relation::{
 };
 pub use scheme::{CommitmentVerifier, OpeningPoints};
 pub use setup::{
-    derive_public_matrix_prefix, sample_akita_setup_seed, validate_public_matrix_matches_seed,
-    AkitaExpandedSetup, AkitaSetupDescriptor, AkitaSetupSeed, AkitaVerifierSetup,
-    PublicMatrixDerivation, SetupMatrixCapacity, MAX_GENERIC_SETUP_DECODE_FIELD_ELEMENTS,
+    derive_public_matrix_prefix, public_matrix_page_xof_input, sample_akita_setup_seed,
+    validate_public_matrix_matches_seed, AkitaExpandedSetup, AkitaSetupDescriptor, AkitaSetupSeed,
+    AkitaVerifierSetup, PublicMatrixDerivation, SetupMatrixCapacity,
+    MAX_GENERIC_SETUP_DECODE_FIELD_ELEMENTS,
 };
 pub use setup_envelope::{
     accumulate_matrix_field_elements_for_level, accumulate_terminal_matrix_field_elements,

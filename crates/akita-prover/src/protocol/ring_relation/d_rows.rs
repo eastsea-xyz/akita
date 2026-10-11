@@ -116,6 +116,7 @@ mod tests {
             akita_types::SetupMatrixCapacity {
                 num_field_elements: 4 * D,
             },
+            None,
         )
         .unwrap();
         let prepared = CpuBackend::DEFAULT

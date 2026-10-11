@@ -16,7 +16,7 @@ pub use verifier::{
 use akita_config::ValidatedScheduleCatalog;
 use akita_config::{CommitmentConfig, SetupRequirements, TrustedScheduleCatalog};
 use akita_error::AkitaError;
-use akita_prover::AkitaProverSetup;
+use akita_prover::{AkitaProverSetup, SetupMatrixGenerator};
 use akita_serialization::{AkitaDeserialize, AkitaSerialize, Valid};
 #[cfg(feature = "disk-persistence")]
 use akita_serialization::{Compress, SerializationError, Validate};
@@ -72,6 +72,7 @@ pub fn new_prover_setup<F, Cfg>(
     schedules: &TrustedScheduleCatalog<Cfg>,
     max_num_vars: usize,
     max_num_batched_polys: usize,
+    matrix_generator: Option<&SetupMatrixGenerator<'_, F>>,
 ) -> Result<AkitaProverSetup<F>, AkitaError>
 where
     F: Field
@@ -112,6 +113,7 @@ where
         max_num_vars,
         max_num_batched_polys,
         requirements.matrix_capacity,
+        matrix_generator,
     )?;
 
     recursive_prefixes::populate_required_setup_prefix_slots(
@@ -601,7 +603,7 @@ mod tests {
 
     #[test]
     fn expanded_setup_roundtrips_and_derives_same_verifier() {
-        let prover_setup = new_prover_setup::<TestF, Cfg>(&schedules(), 14, 3).unwrap();
+        let prover_setup = new_prover_setup::<TestF, Cfg>(&schedules(), 14, 3, None).unwrap();
         let capacity = SetupMatrixCapacity {
             num_field_elements: prover_setup.expanded.shared_matrix().num_field_elements() / 2,
         };
@@ -631,7 +633,7 @@ mod tests {
         for (max_num_vars, batch) in [(14, 1), (14, 3), (16, 2)] {
             let catalog = schedules();
             let prover_setup =
-                new_prover_setup::<TestF, Cfg>(&catalog, max_num_vars, batch).unwrap();
+                new_prover_setup::<TestF, Cfg>(&catalog, max_num_vars, batch, None).unwrap();
             let requirements =
                 SetupRequirements::from_catalog::<Cfg>(&catalog, max_num_vars, batch).unwrap();
             let capacity = verifier_matrix_capacity(&requirements);
@@ -678,7 +680,7 @@ mod tests {
     fn setup_accepts_field_coupled_presets() {
         // The D64 catalog begins at nv=14, the first singleton shape with the
         // required root and suffix folds.
-        new_prover_setup::<fp128::Field, fp128::Dense>(&schedules(), 14, 1)
+        new_prover_setup::<fp128::Field, fp128::Dense>(&schedules(), 14, 1, None)
             .expect("fp128 dense preset should accept the default field");
     }
 
@@ -742,7 +744,7 @@ mod tests {
                 cleanup_setup_file_shape(MAX_VARS, 1);
 
                 let prover_setup =
-                    new_prover_setup::<TestF, Cfg>(&schedules(), MAX_VARS, 1).unwrap();
+                    new_prover_setup::<TestF, Cfg>(&schedules(), MAX_VARS, 1, None).unwrap();
 
                 let loaded = load_prover_setup::<TestF>(
                     &schedules(),
@@ -817,7 +819,8 @@ mod tests {
 
                 cleanup_setup_file_shape(MAX_VARS, 1);
 
-                let mut setup = new_prover_setup::<TestF, Cfg>(&schedules(), MAX_VARS, 1).unwrap();
+                let mut setup =
+                    new_prover_setup::<TestF, Cfg>(&schedules(), MAX_VARS, 1, None).unwrap();
                 let inner_bound = akita_types::sis::rounded_up_role_a_inf_norm(
                     DEFAULT_SIS_SECURITY_POLICY,
                     SisTableDigest::CURRENT,
@@ -953,9 +956,11 @@ mod tests {
 
                 cleanup_setup_file_shape(MAX_VARS, 1);
 
-                let first = new_prover_setup::<TestF, Cfg>(&schedules(), MAX_VARS, 1).unwrap();
+                let first =
+                    new_prover_setup::<TestF, Cfg>(&schedules(), MAX_VARS, 1, None).unwrap();
 
-                let second = new_prover_setup::<TestF, Cfg>(&schedules(), MAX_VARS, 1).unwrap();
+                let second =
+                    new_prover_setup::<TestF, Cfg>(&schedules(), MAX_VARS, 1, None).unwrap();
 
                 assert_eq!(first.expanded, second.expanded);
 
@@ -976,7 +981,8 @@ mod tests {
                     let _ = fs::remove_file(path);
                 }
 
-                let large = new_prover_setup::<TestF, Cfg>(&schedules(), LARGE_VARS, 1).unwrap();
+                let large =
+                    new_prover_setup::<TestF, Cfg>(&schedules(), LARGE_VARS, 1, None).unwrap();
                 let large_fields = large.expanded.shared_matrix().num_field_elements();
                 let catalog = schedules();
                 let small_required =
@@ -986,7 +992,8 @@ mod tests {
                         .num_field_elements;
                 assert!(large_fields >= small_required);
 
-                let covered = new_prover_setup::<TestF, Cfg>(&schedules(), SMALL_VARS, 1).unwrap();
+                let covered =
+                    new_prover_setup::<TestF, Cfg>(&schedules(), SMALL_VARS, 1, None).unwrap();
                 assert_eq!(
                     covered.expanded.shared_matrix().num_field_elements(),
                     large_fields
@@ -1025,6 +1032,7 @@ mod tests {
                     SetupRequirements::from_catalog::<Cfg>(&schedules(), SMALL_VARS, 1)
                         .map(|requirements| requirements.matrix_capacity)
                         .unwrap(),
+                    None,
                 )
                 .unwrap();
                 let large = AkitaProverSetup::generate_with_capacity(
@@ -1033,6 +1041,7 @@ mod tests {
                     SetupRequirements::from_catalog::<Cfg>(&schedules(), LARGE_VARS, 1)
                         .map(|requirements| requirements.matrix_capacity)
                         .unwrap(),
+                    None,
                 )
                 .unwrap();
                 let large_fields = large.expanded.shared_matrix().num_field_elements();
@@ -1082,7 +1091,7 @@ mod tests {
                 cleanup_setup_file_shape(MAX_VARS, 1);
 
                 let prover_setup =
-                    new_prover_setup::<TestF, Cfg>(&schedules(), MAX_VARS, 1).unwrap();
+                    new_prover_setup::<TestF, Cfg>(&schedules(), MAX_VARS, 1, None).unwrap();
                 let total = prover_setup.expanded.shared_matrix().num_field_elements();
                 let corrupt = AkitaExpandedSetup::from_trusted_seed_derived_parts_unchecked(
                     prover_setup.expanded.descriptor().clone(),
@@ -1119,7 +1128,7 @@ mod tests {
 
                 cleanup_setup_file_shape(MAX_VARS, 1);
 
-                new_prover_setup::<TestF, Cfg>(&schedules(), MAX_VARS, 1).unwrap();
+                new_prover_setup::<TestF, Cfg>(&schedules(), MAX_VARS, 1, None).unwrap();
                 let path =
                     get_public_matrix_storage_path::<TestF>(&sample_akita_setup_seed()).unwrap();
                 let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
@@ -1151,7 +1160,7 @@ mod tests {
                 cleanup_setup_file_shape(MAX_VARS, 1);
 
                 let fresh_setup =
-                    new_prover_setup::<TestF, Cfg>(&schedules(), MAX_VARS, 1).unwrap();
+                    new_prover_setup::<TestF, Cfg>(&schedules(), MAX_VARS, 1, None).unwrap();
 
                 let disk_setup = load_prover_setup::<TestF>(
                     &schedules(),

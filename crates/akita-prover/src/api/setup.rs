@@ -5,11 +5,19 @@ use akita_error::AkitaError;
 use akita_serialization::{AkitaSerialize, SerializationError, Valid};
 use akita_types::{
     derive_public_matrix_prefix, sample_akita_setup_seed, AkitaExpandedSetup, AkitaSetupDescriptor,
-    AkitaVerifierSetup, FlatMatrix, SetupMatrixCapacity, SetupPrefixProverRegistry,
+    AkitaSetupSeed, AkitaVerifierSetup, FlatMatrix, SetupMatrixCapacity, SetupPrefixProverRegistry,
     SetupPrefixVerifierRegistry,
 };
 use jolt_field::{CanonicalEncoding, Field};
 use std::sync::Arc;
+
+/// Trusted producer of the exact public field prefix for one setup seed.
+///
+/// A borrowed producer is `Sync` because setup construction can enter the
+/// caller's Rayon pool. Shape and field encodings are checked at construction;
+/// seed derivation is the producer's contract and is not re-executed on CPU.
+pub type SetupMatrixGenerator<'a, F> =
+    dyn Fn(usize, &AkitaSetupSeed) -> Result<FlatMatrix<F>, AkitaError> + Sync + 'a;
 
 /// Prover setup artifact.
 ///
@@ -33,6 +41,8 @@ impl<F: Field> AkitaProverSetup<F> {
     /// The caller supplies config-derived provisioning bounds in base-field
     /// elements. This constructor owns only the concrete prover artifact:
     /// materialization of that prefix of the public field stream.
+    /// `None` uses the canonical CPU producer; a supplied trusted producer
+    /// replaces only matrix expansion, preserving setup identity and layout.
     ///
     /// # Errors
     ///
@@ -43,6 +53,7 @@ impl<F: Field> AkitaProverSetup<F> {
         max_num_vars: usize,
         max_num_batched_polys: usize,
         setup_capacity: SetupMatrixCapacity,
+        matrix_generator: Option<&SetupMatrixGenerator<'_, F>>,
     ) -> Result<Self, AkitaError>
     where
         F: Field + CanonicalEncoding + AkitaSerialize,
@@ -58,8 +69,31 @@ impl<F: Field> AkitaProverSetup<F> {
             AkitaError::InvalidSetup(format!("setup seed validation failed: {err}"))
         })?;
 
-        let shared_flat =
-            derive_public_matrix_prefix::<F>(setup_capacity.num_field_elements, &setup_seed);
+        let shared_flat = match matrix_generator {
+            Some(generate) => {
+                let matrix = generate(setup_capacity.num_field_elements, &setup_seed)?;
+                if matrix.num_field_elements() != setup_capacity.num_field_elements {
+                    return Err(AkitaError::InvalidSetup(format!(
+                        "setup matrix generator returned {} field elements, expected {}",
+                        matrix.num_field_elements(),
+                        setup_capacity.num_field_elements,
+                    )));
+                }
+                let mut encoded = vec![0u8; F::NUM_BYTES];
+                for (index, value) in matrix.as_field_slice().iter().enumerate() {
+                    value.to_bytes_le(&mut encoded);
+                    if F::from_bytes_le_checked(&encoded) != Some(*value) {
+                        return Err(AkitaError::InvalidSetup(format!(
+                            "setup matrix generator returned a noncanonical field at index {index}",
+                        )));
+                    }
+                }
+                matrix
+            }
+            None => {
+                derive_public_matrix_prefix::<F>(setup_capacity.num_field_elements, &setup_seed)
+            }
+        };
         let expanded = Arc::new(
             AkitaExpandedSetup::from_trusted_seed_derived_parts_unchecked(seed, shared_flat),
         );
@@ -205,6 +239,7 @@ mod tests {
             SetupMatrixCapacity {
                 num_field_elements: 0,
             },
+            None,
         )
         .expect_err("zero setup length must not produce an undecodable setup");
         assert!(zero_len.to_string().contains("num_field_elements"));
@@ -218,6 +253,7 @@ mod tests {
             SetupMatrixCapacity {
                 num_field_elements: 8,
             },
+            None,
         )
         .expect("generate setup");
 
@@ -259,6 +295,7 @@ mod tests {
             8,
             1,
             SetupMatrixCapacity::minimum(),
+            None,
         )
         .expect("generate setup");
         let decomposed =
@@ -370,5 +407,70 @@ mod tests {
             })
             .expect_err("insert must reject malformed prefix slot");
         assert!(err.to_string().contains("commitment row"));
+    }
+
+    #[test]
+    fn trusted_matrix_generator_matches_the_canonical_cpu_setup() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let calls = AtomicUsize::new(0);
+        let generate: &SetupMatrixGenerator<'_, Prime128Offset275> = &|count, seed| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            assert_eq!(count, 64);
+            assert_eq!(seed, &sample_akita_setup_seed());
+            Ok(derive_public_matrix_prefix(count, seed))
+        };
+        let capacity = SetupMatrixCapacity {
+            num_field_elements: 64,
+        };
+        let supplied = AkitaProverSetup::generate_with_capacity(8, 1, capacity, Some(generate))
+            .expect("trusted matrix producer");
+        let cpu =
+            AkitaProverSetup::<Prime128Offset275>::generate_with_capacity(8, 1, capacity, None)
+                .expect("canonical CPU producer");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(supplied, cpu);
+    }
+
+    #[test]
+    fn trusted_matrix_generator_rejects_wrong_field_capacity() {
+        for returned_count in [63, 65] {
+            let generate: &SetupMatrixGenerator<'_, Prime128Offset275> =
+                &|_, seed| Ok(derive_public_matrix_prefix(returned_count, seed));
+            let error = AkitaProverSetup::generate_with_capacity(
+                8,
+                1,
+                SetupMatrixCapacity {
+                    num_field_elements: 64,
+                },
+                Some(generate),
+            )
+            .expect_err("mismatched producer extent must fail before setup assembly");
+            assert!(error.to_string().contains("field elements, expected 64"));
+        }
+    }
+
+    #[test]
+    fn trusted_matrix_generator_errors_are_returned_without_cpu_rederivation() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let calls = AtomicUsize::new(0);
+        let generate: &SetupMatrixGenerator<'_, Prime128Offset275> = &|_, _| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Err(AkitaError::InvalidSetup("forced producer error".to_owned()))
+        };
+        let error = AkitaProverSetup::generate_with_capacity(
+            8,
+            1,
+            SetupMatrixCapacity {
+                num_field_elements: 64,
+            },
+            Some(generate),
+        )
+        .expect_err("producer error must be returned before CPU fallback is chosen by the host");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(
+            matches!(error, AkitaError::InvalidSetup(message) if message == "forced producer error")
+        );
     }
 }

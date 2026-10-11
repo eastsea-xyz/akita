@@ -90,6 +90,7 @@ fn configured_scratch_budget_preserves_onehot_commit_arithmetic() {
         SetupMatrixCapacity {
             num_field_elements: plan.n_a * plan.num_positions_per_block * D,
         },
+        None,
     )
     .unwrap();
     let default_backend = CpuBackend::DEFAULT;

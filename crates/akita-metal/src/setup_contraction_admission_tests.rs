@@ -15,6 +15,7 @@ fn scalar_setup_columns_require_metal_hook_and_match_cpu_reference() {
         SetupMatrixCapacity {
             num_field_elements: 3 * 5 * D,
         },
+        None,
     )
     .unwrap();
     let backend = MetalBackend::new(MetalExecutionPolicy::RequireMetal).unwrap();

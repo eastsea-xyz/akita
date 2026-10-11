@@ -74,9 +74,9 @@ fn proofs_cannot_replay_across_valid_quotient_and_reduced_schedules() {
             .expect("reduced setup capacity");
             let setup =
                 if quotient_capacity.num_field_elements >= reduced_capacity.num_field_elements {
-                    quotient_scheme.setup_prover(full_num_vars, 1)
+                    quotient_scheme.setup_prover(full_num_vars, 1, None)
                 } else {
-                    reduced_scheme.setup_prover(full_num_vars, 1)
+                    reduced_scheme.setup_prover(full_num_vars, 1, None)
                 }
                 .expect("cross-mode setup");
             let prepared = CpuBackend::DEFAULT

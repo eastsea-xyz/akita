@@ -13,6 +13,7 @@ fn assert_general_parity<const D: usize>() {
         SetupMatrixCapacity {
             num_field_elements: MAX_ROWS * MAX_COLUMNS * D,
         },
+        None,
     )
     .unwrap();
     let cpu = CpuBackend::DEFAULT;
@@ -99,6 +100,7 @@ fn general_relation_rows_reuse_larger_linear_prefix_with_unequal_widths() {
         SetupMatrixCapacity {
             num_field_elements: 3 * 11 * D,
         },
+        None,
     )
     .unwrap();
     let metal = MetalBackend::new(MetalExecutionPolicy::RequireMetal).unwrap();
@@ -153,6 +155,7 @@ fn general_relation_rows_reject_malformed_before_any_matrix_transform() {
         SetupMatrixCapacity {
             num_field_elements: D,
         },
+        None,
     )
     .unwrap();
     let metal = MetalBackend::new(MetalExecutionPolicy::RequireMetal).unwrap();

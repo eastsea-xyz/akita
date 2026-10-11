@@ -37,6 +37,7 @@ fn scalar_setup_contractions_random_all_dimensions_and_batched_role_shapes() {
         SetupMatrixCapacity {
             num_field_elements: 5 * 11 * 512,
         },
+        None,
     )
     .unwrap();
     let backend = MetalBackend::new(MetalExecutionPolicy::RequireMetal).unwrap();
@@ -118,6 +119,7 @@ fn scalar_setup_contractions_zero_empty_and_invalid_batch_admission() {
         SetupMatrixCapacity {
             num_field_elements: 3 * 5 * 128,
         },
+        None,
     )
     .unwrap();
     let backend = MetalBackend::new(MetalExecutionPolicy::RequireMetal).unwrap();
@@ -218,6 +220,7 @@ fn setup_contractions_proper_degree_two_selects_exact_cpu_oracle() {
         SetupMatrixCapacity {
             num_field_elements: 3 * 5 * 128,
         },
+        None,
     )
     .unwrap();
     let backend = MetalBackend::new(MetalExecutionPolicy::RequireMetal).unwrap();

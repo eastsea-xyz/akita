@@ -14,7 +14,7 @@ fn profile_native_commit_group_returns_exact_frozen_layout() {
     assert_eq!(total_field % onehot_source_chunk_size::<OneHotCfg>(), 0);
     let polys = [debug_make_onehot_poly(NV, ONEHOT_D, 0x0bee_fcaf_9a77_0001)];
 
-    let setup = scheme.setup_prover(NV, GROUP_SIZE).expect("setup");
+    let setup = scheme.setup_prover(NV, GROUP_SIZE, None).expect("setup");
     let prepared = CpuBackend::DEFAULT
         .prepare_setup(&setup)
         .expect("prepared setup");
@@ -75,7 +75,7 @@ fn with_precommit_stack<R>(
     ) -> R,
 ) -> R {
     let setup = scheme
-        .setup_prover(max_num_vars, max_num_polys)
+        .setup_prover(max_num_vars, max_num_polys, None)
         .expect("setup");
     let prepared = CpuBackend::DEFAULT
         .prepare_setup(&setup)
@@ -229,7 +229,7 @@ fn group_batch_commits_independent_arity_precommitted_groups() {
     )];
 
     let setup = scheme
-        .setup_prover(FINAL_NV, SETUP_CAPACITY_SIZE)
+        .setup_prover(FINAL_NV, SETUP_CAPACITY_SIZE, None)
         .expect("protocol setup");
     let prepared = CpuBackend::DEFAULT
         .prepare_setup(&setup)
@@ -357,7 +357,7 @@ fn commit_group_returns_frozen_exact_layout() {
     assert_eq!(total_field % onehot_source_chunk_size::<OneHotCfg>(), 0);
     let polys = [debug_make_onehot_poly(NV, ONEHOT_D, 0x0bee_fcaf_9a77_0001)];
 
-    let setup = scheme.setup_prover(NV, GROUP_SIZE).expect("setup");
+    let setup = scheme.setup_prover(NV, GROUP_SIZE, None).expect("setup");
     let prepared = CpuBackend::DEFAULT
         .prepare_setup(&setup)
         .expect("prepared setup");
@@ -444,7 +444,7 @@ fn batched_onehot_roundtrip_matches_public_shape_context() {
         })
         .collect();
 
-    let setup = scheme.setup_prover(NV, BATCH_SIZE).unwrap();
+    let setup = scheme.setup_prover(NV, BATCH_SIZE, None).unwrap();
     let cached_backend = CpuBackend::with_resource_limits(
         usize::MAX,
         CpuBackend::DEFAULT_COMMIT_SCRATCH_BYTES_PER_WORKER,

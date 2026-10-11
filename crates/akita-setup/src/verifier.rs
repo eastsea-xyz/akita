@@ -183,6 +183,7 @@ where
         0,
         1,
         SetupMatrixCapacity { num_field_elements },
+        None,
     )?;
     recursive_prefixes::populate_required_setup_prefix_slots(&mut setup, slot_ids)?;
     Ok(slot_ids

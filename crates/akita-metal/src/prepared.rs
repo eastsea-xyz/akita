@@ -294,6 +294,7 @@ mod tests {
             SetupMatrixCapacity {
                 num_field_elements: field_count,
             },
+            None,
         )
         .unwrap();
         Arc::make_mut(&mut setup.expanded).shared_matrix =
@@ -353,6 +354,7 @@ mod tests {
             SetupMatrixCapacity {
                 num_field_elements: 512 * 16,
             },
+            None,
         )
         .unwrap();
         let backend = MetalBackend::new(MetalExecutionPolicy::RequireMetal).unwrap();
