@@ -32,11 +32,15 @@ mod plans;
 mod poly;
 mod requirements;
 mod runtime_capabilities;
+mod setup_columns;
+mod sparse_high_half;
 mod stack;
+
+pub use akita_challenges::SparseChallenge;
 
 pub use backend::{
     CompressionComputeBackend, CompressionRowsProducts, ComputeBackendSetup,
-    CyclicRowsComputeBackend, DigitRowsComputeBackend, NttCacheOwnerId,
+    CyclicRowsComputeBackend, DigitRowsComputeBackend, NttCacheOwnerId, PackedWitnessZ,
 };
 pub use cpu::{CpuBackend, CpuPreparedSetup, PreparedCrtNttProfile, PreparedNttCacheMetric};
 pub use delegating_cpu::{CommitCluster, OpeningCluster, RingSwitchCluster, TensorCluster};
@@ -52,6 +56,7 @@ pub use operation_plans::{
 pub(crate) use plans::DenseCommitInput;
 pub use plans::RingSwitchRelationRows;
 pub use requirements::{NttExecutionRequirements, NttOperationCluster, RoutedNttRequirement};
+pub use sparse_high_half::SparseHighHalfBatch;
 
 pub use poly::{
     centered_reach_of_field_coeffs, CommitBackendFor, OpeningProveBackendFor, ProveFlowBackendFor,
@@ -71,3 +76,5 @@ pub use stack::{
     PlannedNttCacheOwnerMetric, ProverComputeStack, ReleaseRootNttAfterFold, TieredProveStacks,
     UniformProverStack, NTT_PREWARM_STACK_BYTES,
 };
+
+pub use setup_columns::SetupColumnContractionPlan;

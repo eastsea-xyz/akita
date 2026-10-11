@@ -1,7 +1,6 @@
 use akita_error::AkitaError;
 use akita_prover::compute::{CommitInnerPlan, DecomposeFoldPlan, RootCommitKernel};
 use akita_prover::{CommitInnerWitness, DecomposeFoldWitness, OneHotPoly, RootCommitSource};
-use jolt_field::One;
 
 use crate::backend::MetalBackend;
 use crate::field::F;
@@ -57,6 +56,7 @@ impl<'a> PackedOneHotCommitView<'a> {
             zero_column_mask,
             None,
             None,
+            None,
         )
     }
 
@@ -78,6 +78,7 @@ impl<'a> PackedOneHotCommitView<'a> {
             active_zero_rows,
             zero_column_mask,
             Some(hot_entries),
+            None,
             None,
         )
     }
@@ -101,6 +102,40 @@ impl<'a> PackedOneHotCommitView<'a> {
             zero_column_mask,
             Some(hot_entries),
             Some(zero_suffix_start),
+            None,
+        )
+    }
+
+    /// Validate geometry and a producer-certified selector bound without
+    /// rescanning selector bytes. The producer must supply the exact entry
+    /// count, maximum selector byte, and start of the all-zero row suffix for
+    /// these immutable lanes and active-zero metadata. Use the checked
+    /// constructor when those certificates are unavailable.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "selector geometry and producer certificates are independent inputs"
+    )]
+    pub fn new_with_precomputed_metrics(
+        onehot_k: usize,
+        column_capacity: usize,
+        num_columns: usize,
+        lanes: &'a [u8],
+        active_zero_rows: &'a [u64],
+        zero_column_mask: u64,
+        hot_entries: usize,
+        zero_suffix_start: usize,
+        maximum_selector: u8,
+    ) -> Result<Self, AkitaError> {
+        Self::new_inner(
+            onehot_k,
+            column_capacity,
+            num_columns,
+            lanes,
+            active_zero_rows,
+            zero_column_mask,
+            Some(hot_entries),
+            Some(zero_suffix_start),
+            Some(maximum_selector),
         )
     }
 
@@ -117,6 +152,7 @@ impl<'a> PackedOneHotCommitView<'a> {
         zero_column_mask: u64,
         precomputed_hot_entries: Option<usize>,
         zero_suffix_start: Option<usize>,
+        maximum_selector: Option<u8>,
     ) -> Result<Self, AkitaError> {
         if onehot_k == 0 || onehot_k > usize::from(u8::MAX) + 1 || !onehot_k.is_power_of_two() {
             return Err(AkitaError::InvalidInput(format!(
@@ -186,10 +222,12 @@ impl<'a> PackedOneHotCommitView<'a> {
             });
         }
         let hot_entries = if let Some(hot_entries) = precomputed_hot_entries {
-            if onehot_k != 256 || hot_entries > lanes.len() {
+            if hot_entries > lanes.len()
+                || (onehot_k != 256 && maximum_selector.is_none())
+                || maximum_selector.is_some_and(|maximum| usize::from(maximum) >= onehot_k)
+            {
                 return Err(AkitaError::InvalidInput(
-                    "precomputed packed entry counts require K256 and cannot exceed the lane count"
-                        .into(),
+                    "precomputed packed metrics exceed the selector bound or lane count".into(),
                 ));
             }
             hot_entries
@@ -582,40 +620,36 @@ impl MetalBackend {
         };
         let timings = outcome.timings;
         let allocation_bytes = outcome.allocation_bytes;
-        let mut compressed = Vec::with_capacity(plan.num_positions_per_block);
-        let mut chunks = outcome.centered_coefficients.chunks_exact(D);
-        for coefficients in chunks.by_ref() {
-            let coefficients: &[i32; D] = coefficients.try_into().map_err(|_| {
-                AkitaError::InvalidSetup("packed opening produced a short coefficient row".into())
-            })?;
-            compressed.push(*coefficients);
-        }
-        if !chunks.remainder().is_empty() {
+        let mut centered = outcome.centered_coefficients;
+        let expected_coefficients = plan.num_positions_per_block.checked_mul(D).ok_or_else(|| {
+            MetalCommitError::ShapeOverflow("packed opening output coefficients").into_akita()
+        })?;
+        if centered.len() != expected_coefficients {
             return Err(AkitaError::InvalidSize {
-                expected: D,
-                actual: chunks.remainder().len(),
+                expected: expected_coefficients,
+                actual: centered.len(),
             });
         }
-        let centered = if plan.num_digits == 1 {
-            compressed
-        } else {
-            let expanded_len = compressed
+        if plan.num_digits > 1 {
+            let expanded_len = centered
                 .len()
                 .checked_mul(plan.num_digits)
                 .ok_or_else(|| {
                     MetalCommitError::ShapeOverflow("packed opening digit expansion").into_akita()
                 })?;
-            let mut expanded = Vec::with_capacity(expanded_len);
-            for coefficients in compressed {
-                expanded.push(coefficients);
-                expanded.extend((1..plan.num_digits).map(|_| [0i32; D]));
+            centered.resize(expanded_len, 0);
+            let coefficients_per_position = D.checked_mul(plan.num_digits).ok_or_else(|| {
+                MetalCommitError::ShapeOverflow("packed opening digit expansion").into_akita()
+            })?;
+            for position in (0..plan.num_positions_per_block).rev() {
+                let source_start = position * D;
+                let destination_start = position * coefficients_per_position;
+                centered.copy_within(source_start..source_start + D, destination_start);
+                centered[destination_start + D..destination_start + coefficients_per_position]
+                    .fill(0);
             }
-            expanded
-        };
-        let modulus = (-F::one()).to_canonical_u128() + 1;
-        let witness = akita_prover::backend::poly_helpers::build_decompose_fold_witness::<F, D>(
-            centered, modulus,
-        );
+        }
+        let witness = DecomposeFoldWitness::from_centered_coeffs_flat::<D>(centered)?;
         self.update_opening_metrics(|metrics| {
             metrics.command_wall_time += timings.command_wall;
             metrics.gpu_active_time += timings.gpu.unwrap_or_default();
@@ -635,6 +669,96 @@ impl MetalBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn certified_k16_metrics_preserve_checked_counts_and_zero_rows() {
+        for active_bits in [0u64, 0b0101, 0b1111] {
+            let lanes = [0, 0, 0, 15, 0, 0, 3, 0];
+            let active_rows = [active_bits];
+            let scanned = PackedOneHotCommitView::new_with_active_zero_rows(
+                16,
+                4,
+                2,
+                &lanes,
+                &active_rows,
+                0b01,
+            )
+            .unwrap();
+            let certified = PackedOneHotCommitView::new_with_precomputed_metrics(
+                16,
+                4,
+                2,
+                &lanes,
+                &active_rows,
+                0b01,
+                scanned.hot_entries(),
+                4,
+                15,
+            )
+            .unwrap();
+            assert_eq!(certified.hot_entries(), scanned.hot_entries());
+            assert_eq!(certified.lanes().as_ptr(), lanes.as_ptr());
+            for row in 0..4 {
+                for column in 0..2 {
+                    assert_eq!(
+                        certified.commits_zero_at(row, column),
+                        scanned.commits_zero_at(row, column),
+                    );
+                }
+            }
+        }
+
+        let lanes = [0u8; 8];
+        let certified =
+            PackedOneHotCommitView::new_with_precomputed_metrics(16, 4, 2, &lanes, &[], 0, 0, 0, 0)
+                .unwrap();
+        assert_eq!(certified.hot_entries(), 0);
+        assert_eq!(certified.zero_suffix_start(), 0);
+    }
+
+    #[test]
+    fn certified_metrics_reject_out_of_range_selector_bound() {
+        let lanes = [0u8, 1, 15, 0];
+        for maximum_selector in [16, u8::MAX] {
+            assert!(PackedOneHotCommitView::new_with_precomputed_metrics(
+                16,
+                2,
+                2,
+                &lanes,
+                &[],
+                0,
+                2,
+                2,
+                maximum_selector,
+            )
+            .is_err());
+        }
+        assert!(PackedOneHotCommitView::new_with_precomputed_metrics(
+            16,
+            2,
+            2,
+            &lanes,
+            &[],
+            0,
+            5,
+            2,
+            15,
+        )
+        .is_err());
+        assert!(PackedOneHotCommitView::new_with_precomputed_metrics(
+            16,
+            2,
+            2,
+            &lanes,
+            &[],
+            0,
+            2,
+            3,
+            15,
+        )
+        .is_err());
+        assert!(PackedOneHotCommitView::new(16, 2, 2, &[0, 1, 16, 0]).is_err());
+    }
 
     #[test]
     fn validates_borrowed_geometry_and_lanes() {

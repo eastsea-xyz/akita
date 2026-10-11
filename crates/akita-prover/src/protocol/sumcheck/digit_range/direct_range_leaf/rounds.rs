@@ -101,16 +101,19 @@ impl<E: Field + Ring + Unreduced + Fold> EqFactoredSumcheckInstanceProver<E>
         self.split_eq.current_tau()
     }
 
-    fn compute_round_eq_factored(&mut self, round: usize) -> EqFactoredUniPoly<E> {
+    fn compute_round_eq_factored(
+        &mut self,
+        round: usize,
+    ) -> Result<EqFactoredUniPoly<E>, AkitaError> {
         debug_assert_eq!(round, self.rounds_completed);
-        if let Some(poly) = self.cached_round_poly.take() {
+        Ok(if let Some(poly) = self.cached_round_poly.take() {
             poly
         } else {
             self.compute_current_round_eq_poly_from_state()
-        }
+        })
     }
 
-    fn ingest_challenge(&mut self, round: usize, r: E) {
+    fn ingest_challenge(&mut self, round: usize, r: E) -> Result<(), AkitaError> {
         debug_assert_eq!(round, self.rounds_completed);
         let _span = tracing::info_span!(
             "digit_range_direct_leaf_fold",
@@ -201,7 +204,7 @@ impl<E: Field + Ring + Unreduced + Fold> EqFactoredSumcheckInstanceProver<E>
             } else {
                 self.cached_round_poly = None;
             }
-            return;
+            return Ok(());
         }
 
         if self.awaiting_compact_range_image_third_challenge() {
@@ -261,7 +264,7 @@ impl<E: Field + Ring + Unreduced + Fold> EqFactoredSumcheckInstanceProver<E>
             } else {
                 self.cached_round_poly = None;
             }
-            return;
+            return Ok(());
         }
 
         self.split_eq.bind(r);
@@ -348,6 +351,7 @@ impl<E: Field + Ring + Unreduced + Fold> EqFactoredSumcheckInstanceProver<E>
         } else {
             self.cached_round_poly = None;
         }
+        Ok(())
     }
 }
 

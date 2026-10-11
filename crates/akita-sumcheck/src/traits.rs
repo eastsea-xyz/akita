@@ -89,13 +89,30 @@ pub trait EqFactoredSumcheckInstanceProver<E: Field>: Send + Sync {
     fn current_tau(&self) -> E;
 
     /// Compute the eq-factored round message.
-    fn compute_round_eq_factored(&mut self, round: usize) -> EqFactoredUniPoly<E>;
+    ///
+    /// # Errors
+    ///
+    /// Propagates any arithmetic backend failure before the transcript absorbs this round.
+    fn compute_round_eq_factored(
+        &mut self,
+        round: usize,
+    ) -> Result<EqFactoredUniPoly<E>, AkitaError>;
 
     /// Ingest the verifier challenge `r_round` to fold/bind the current variable.
-    fn ingest_challenge(&mut self, round: usize, r_round: E);
+    ///
+    /// # Errors
+    ///
+    /// Propagates any arithmetic backend failure during binding.
+    fn ingest_challenge(&mut self, round: usize, r_round: E) -> Result<(), AkitaError>;
 
     /// Optional end-of-protocol hook after the last challenge has been ingested.
-    fn finalize(&mut self) {}
+    ///
+    /// # Errors
+    ///
+    /// Propagates any arithmetic backend failure during finalization.
+    fn finalize(&mut self) -> Result<(), AkitaError> {
+        Ok(())
+    }
 }
 
 /// Mutable verifier round state for an eq-factored sumcheck proof.

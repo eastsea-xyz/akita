@@ -46,6 +46,18 @@ where
         expanded: Arc<AkitaExpandedSetup<F>>,
     ) -> Result<Self::PreparedSetup, AkitaError>;
 
+    /// Optional batched scalar setup-column projection.
+    ///
+    /// `None` selects the canonical CPU contraction before any source work.
+    /// Outputs retain request order and `[column offset][batch]` value order.
+    fn contract_setup_columns<E: akita_types::FpExtEncoding<F>>(
+        &self,
+        _prepared: &Self::PreparedSetup,
+        _plans: &[super::SetupColumnContractionPlan<'_, E>],
+    ) -> Result<Option<Vec<Vec<E>>>, AkitaError> {
+        Ok(None)
+    }
+
     /// Build the cache for `key` if absent.
     fn ensure_ntt_slot(
         &self,
@@ -166,12 +178,34 @@ where
     ) -> Result<Vec<Vec<CyclotomicRing<F, D>>>, AkitaError>;
 }
 
+/// Exact-width packed centered Z planes in physical row/fold/coefficient order.
+/// Signed extrema are exact and accompany the backend-owned encoding.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PackedWitnessZ {
+    pub bytes: Vec<u8>,
+    pub digit_len: usize,
+    pub negative_abs_max: u8,
+    pub positive_max: u8,
+}
+
 /// Negacyclic digit mat-vec operations shared by commitment and protocol code.
 pub trait DigitRowsComputeBackend<F>:
     ComputeBackendSetup<F> + CompressionComputeBackend<F>
 where
     F: Field + CanonicalEncoding,
 {
+    /// Optional direct packed decomposition of host-owned centered Z rows.
+    /// `None` selects the existing CPU decomposition before execution.
+    fn pack_centered_witness_z<const D: usize>(
+        &self,
+        _centered: &[i32],
+        _fold_planes: usize,
+        _log_basis: u32,
+        _bit_width: u8,
+    ) -> Result<Option<PackedWitnessZ>, AkitaError> {
+        Ok(None)
+    }
+
     /// Negacyclic digit mat-vec rows for an equal-width input batch.
     fn digit_rows<const D: usize>(
         &self,

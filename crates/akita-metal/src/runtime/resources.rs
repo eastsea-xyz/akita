@@ -37,11 +37,18 @@ fn constant_buffer<T>(device: &Device, values: &[T]) -> Buffer {
     )
 }
 
-pub(super) fn d512_linear_relation_resources(device: &Device) -> D512LinearRelationResources {
+pub(super) fn linear_relation_resources(
+    device: &Device,
+    ntt_size: usize,
+) -> D512LinearRelationResources {
+    assert!(matches!(ntt_size, 128 | 256 | 512 | 1024));
+    assert!(FP128_D512_LINEAR_RELATION_RAW_PRIMES
+        .iter()
+        .all(|prime| (*prime as usize - 1).is_multiple_of(ntt_size)));
     let primes = FP128_D512_LINEAR_RELATION_RAW_PRIMES.map(NttPrime::<i32>::compute);
     let mut device_primes = Vec::with_capacity(primes.len());
-    let mut fwd_twiddles = Vec::with_capacity(primes.len() * FP128_D512_LINEAR_RELATION_NTT_SIZE);
-    let mut inv_twiddles = Vec::with_capacity(primes.len() * FP128_D512_LINEAR_RELATION_NTT_SIZE);
+    let mut fwd_twiddles = Vec::with_capacity(primes.len() * ntt_size);
+    let mut inv_twiddles = Vec::with_capacity(primes.len() * ntt_size);
     let mut d_inv = Vec::with_capacity(primes.len());
     let mut limb_weights = Vec::with_capacity(primes.len() * 4);
     let mut field_moduli = Vec::with_capacity(primes.len());
@@ -55,14 +62,14 @@ pub(super) fn d512_linear_relation_resources(device: &Device) -> D512LinearRelat
             montsq: prime.montsq,
         });
         let modulus = i64::from(prime.p);
-        let root = primitive_root_of_unity(modulus, FP128_D512_LINEAR_RELATION_NTT_SIZE);
+        let root = primitive_root_of_unity(modulus, ntt_size);
         let root_inverse = pow_mod(root, modulus - 2, modulus);
         let one = prime.from_canonical(1);
-        let mut prime_fwd = vec![0i32; FP128_D512_LINEAR_RELATION_NTT_SIZE];
-        let mut prime_inv = vec![0i32; FP128_D512_LINEAR_RELATION_NTT_SIZE];
-        for stage in 0..FP128_D512_LINEAR_RELATION_NTT_SIZE.ilog2() as usize {
+        let mut prime_fwd = vec![0i32; ntt_size];
+        let mut prime_inv = vec![0i32; ntt_size];
+        for stage in 0..ntt_size.ilog2() as usize {
             let len = 1usize << stage;
-            let exponent = (FP128_D512_LINEAR_RELATION_NTT_SIZE / (2 * len)) as i64;
+            let exponent = (ntt_size / (2 * len)) as i64;
             let fwd_step = prime.from_canonical(pow_mod(root, exponent, modulus) as i32);
             let inv_step = prime.from_canonical(pow_mod(root_inverse, exponent, modulus) as i32);
             let mut fwd = one;
@@ -76,11 +83,7 @@ pub(super) fn d512_linear_relation_resources(device: &Device) -> D512LinearRelat
         }
         fwd_twiddles.extend(prime_fwd);
         inv_twiddles.extend(prime_inv);
-        let inverse = prime.from_canonical(pow_mod(
-            FP128_D512_LINEAR_RELATION_NTT_SIZE as i64,
-            modulus - 2,
-            modulus,
-        ) as i32);
+        let inverse = prime.from_canonical(pow_mod(ntt_size as i64, modulus - 2, modulus) as i32);
         d_inv.push(inverse.raw());
 
         let radix = (1u128 << 32) % prime.p as u128;
@@ -345,6 +348,16 @@ impl MetalRuntime {
             .find(|resources| resources.ring_d == ring_d)
     }
 
+    /// D256/D512 use a single shared spectrum per group; the smaller dimensions
+    /// retain the existing sixteen independent SIMD-owned blocks.
+    pub(crate) const fn recursive_commit_blocks_per_group<const D: usize>() -> usize {
+        if matches!(D, 256 | 512) {
+            1
+        } else {
+            FP128_RECURSIVE_COMMIT_BLOCKS_PER_GROUP
+        }
+    }
+
     pub(crate) fn supports_fp128_recursive_commit<const D: usize>(
         &self,
         num_blocks: usize,
@@ -352,7 +365,7 @@ impl MetalRuntime {
         num_cols: usize,
         rhs_abs_bound: u64,
     ) -> bool {
-        if !matches!(D, 64 | 128)
+        if !matches!(D, 64 | 128 | 256 | 512)
             || num_blocks == 0
             || num_rows == 0
             || num_rows > FP128_RECURSIVE_COMMIT_MAX_ROWS
@@ -375,6 +388,7 @@ impl MetalRuntime {
             .and_then(|count| count.checked_mul(D));
         let matrix_ntt_bytes = matrix_rings
             .and_then(|count| count.checked_mul(D))
+            .and_then(|count| count.checked_mul(2))
             .and_then(|count| count.checked_mul(FP128_D512_LINEAR_RELATION_NUM_PRIMES))
             .and_then(|count| count.checked_mul(size_of::<i32>()));
         let residue_bytes = num_blocks
@@ -387,6 +401,11 @@ impl MetalRuntime {
             .and_then(|count| count.checked_mul(D))
             .and_then(|count| count.checked_mul(size_of::<Fp128Limbs>()));
         let maximum = self.device.max_buffer_length();
+        let matvec_pipeline = if matches!(D, 256 | 512) {
+            &self.fp128_recursive_commit_d512_matvec_pipeline
+        } else {
+            &self.fp128_recursive_commit_matvec_pipeline
+        };
         [source_bytes, matrix_ntt_bytes, residue_bytes, output_bytes]
             .into_iter()
             .all(|bytes| bytes.is_some_and(|bytes| bytes != 0 && bytes as u64 <= maximum))
@@ -394,7 +413,7 @@ impl MetalRuntime {
                 .and_then(|count| count.checked_mul(FP128_D512_LINEAR_RELATION_NUM_PRIMES))
                 .is_some_and(|groups| groups <= u32::MAX as usize)
             && num_blocks
-                .div_ceil(FP128_RECURSIVE_COMMIT_BLOCKS_PER_GROUP)
+                .div_ceil(Self::recursive_commit_blocks_per_group::<D>())
                 .checked_mul(FP128_D512_LINEAR_RELATION_NUM_PRIMES)
                 .is_some_and(|groups| groups <= u32::MAX as usize)
             && output_bytes
@@ -403,12 +422,10 @@ impl MetalRuntime {
                     count.div_ceil(FP128_RECURSIVE_COMMIT_RECONSTRUCT_THREADS) <= u32::MAX as usize
                 })
             && self
-                .fp128_recursive_commit_matrix_ntt_pipeline
+                .fp128_relation_rows_matrix_ntt_pipeline
                 .max_total_threads_per_threadgroup()
-                >= D as u64
-            && self
-                .fp128_recursive_commit_matvec_pipeline
-                .max_total_threads_per_threadgroup()
+                >= 512
+            && matvec_pipeline.max_total_threads_per_threadgroup()
                 >= FP128_RECURSIVE_COMMIT_THREADS as u64
             && self
                 .fp128_recursive_commit_reconstruct_pipeline

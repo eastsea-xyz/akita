@@ -134,7 +134,6 @@ impl PackedSignedDigits {
         self.len == 0
     }
 
-    #[cfg(test)]
     pub(crate) fn bit_width(&self) -> u8 {
         self.bit_width
     }
@@ -143,7 +142,6 @@ impl PackedSignedDigits {
         self.bounds
     }
 
-    #[cfg(test)]
     pub(crate) fn encoded_bytes(&self) -> &[u8] {
         &self.storage[..self.encoded_len]
     }
@@ -268,6 +266,99 @@ impl PackedSignedDigitWriter {
         self.position
     }
 
+    pub(crate) fn bit_width(&self) -> u8 {
+        self.bit_width
+    }
+
+    /// Append an exact-width backend-encoded segment without unpacking its digits.
+    /// Extrema are supplied by the trusted compute backend, just as digit-row
+    /// arithmetic is; all byte extents and boundary bits are checked here.
+    pub(crate) fn write_at_encoded(
+        &mut self,
+        start: usize,
+        digit_len: usize,
+        bytes: &[u8],
+        negative_abs_max: u8,
+        positive_max: u8,
+    ) -> Result<(), AkitaError> {
+        if start < self.position {
+            return Err(AkitaError::InvalidInput(
+                "packed signed-digit writes must be in physical order".into(),
+            ));
+        }
+        let end = start.checked_add(digit_len).ok_or_else(|| {
+            AkitaError::InvalidInput("packed encoded segment digit extent overflow".into())
+        })?;
+        if end > self.len {
+            return Err(AkitaError::InvalidSize {
+                expected: self.len,
+                actual: end,
+            });
+        }
+        let bit_len = digit_len
+            .checked_mul(usize::from(self.bit_width))
+            .ok_or_else(|| {
+                AkitaError::InvalidInput("packed encoded segment bit extent overflow".into())
+            })?;
+        let bit_start = start
+            .checked_mul(usize::from(self.bit_width))
+            .ok_or_else(|| {
+                AkitaError::InvalidInput("packed encoded segment bit offset overflow".into())
+            })?;
+        let bit_end = bit_start.checked_add(bit_len).ok_or_else(|| {
+            AkitaError::InvalidInput("packed encoded segment bit end overflow".into())
+        })?;
+        let expected_bytes = bit_len.div_ceil(8);
+        if bytes.len() != expected_bytes {
+            return Err(AkitaError::InvalidSize {
+                expected: expected_bytes,
+                actual: bytes.len(),
+            });
+        }
+        if bit_len % 8 != 0 && bytes.last().is_some_and(|byte| *byte >> (bit_len % 8) != 0) {
+            return Err(AkitaError::InvalidInput(
+                "packed encoded segment has nonzero tail padding".into(),
+            ));
+        }
+        let bounds = SignedDigitBounds {
+            negative_abs_max,
+            positive_max,
+        };
+        validate_bounds(bounds, self.bit_width)?;
+        if digit_len == 0 && (negative_abs_max != 0 || positive_max != 0) {
+            return Err(AkitaError::InvalidInput(
+                "empty packed encoded segment has nonzero bounds".into(),
+            ));
+        }
+        // All input validation precedes mutation, including advancement over gaps.
+        self.extend_zeros(start - self.position)?;
+        self.flush_staging()?;
+        if bit_len != 0 {
+            let storage = Arc::get_mut(&mut self.storage)
+                .expect("streaming packed storage remains uniquely owned");
+            let byte_start = bit_start / 8;
+            let shift = bit_start % 8;
+            if shift == 0 {
+                storage[byte_start..byte_start + bytes.len()].copy_from_slice(bytes);
+            } else {
+                // Only the leading byte has pre-existing payload bits. The
+                // suffix and all intervening bytes are still zero initialized.
+                storage[byte_start] |= bytes[0] << shift;
+                for index in 1..bytes.len() {
+                    storage[byte_start + index] =
+                        (bytes[index - 1] >> (8 - shift)) | (bytes[index] << shift);
+                }
+                if bit_end.div_ceil(8) > byte_start + bytes.len() {
+                    storage[byte_start + bytes.len()] = bytes[bytes.len() - 1] >> (8 - shift);
+                }
+            }
+        }
+        self.bounds.include_bounds(bounds);
+        self.position = end;
+        self.flushed = end;
+        Ok(())
+    }
+
     pub(crate) fn write_at(&mut self, start: usize, digits: &[i8]) -> Result<(), AkitaError> {
         if start < self.position {
             return Err(AkitaError::InvalidInput(
@@ -384,21 +475,32 @@ impl PackedSignedDigitWriter {
         }
         self.bounds
             .include_bounds(signed_digit_bounds(&self.staging));
-        debug_assert!(self.flushed.is_multiple_of(DIGITS_PER_BLOCK));
-        let encoded_start = encoded_byte_len(self.flushed, self.bit_width)?;
-        let encoded_batch_len = encoded_byte_len(self.staging.len(), self.bit_width)?;
-        let encoded_end = encoded_start
-            .checked_add(encoded_batch_len)
-            .ok_or_else(|| AkitaError::InvalidInput("packed batch end overflow".into()))?;
         let storage = Arc::get_mut(&mut self.storage)
             .expect("streaming packed storage remains uniquely owned");
-        encode_digits(
-            &self.staging,
-            self.bit_width,
-            storage
-                .get_mut(encoded_start..encoded_end)
-                .ok_or(AkitaError::InvalidProof)?,
-        );
+        // Backend-encoded segments may end inside a 64-digit block. Finish
+        // that bounded prefix before resuming the ordinary parallel encoder.
+        let prefix = if self.flushed.is_multiple_of(DIGITS_PER_BLOCK) {
+            0
+        } else {
+            (DIGITS_PER_BLOCK - self.flushed % DIGITS_PER_BLOCK).min(self.staging.len())
+        };
+        for (offset, &digit) in self.staging[..prefix].iter().enumerate() {
+            scalar::encode_at(storage, self.flushed + offset, self.bit_width, digit);
+        }
+        let remainder = &self.staging[prefix..];
+        if !remainder.is_empty() {
+            let encoded_start = encoded_byte_len(self.flushed + prefix, self.bit_width)?;
+            let encoded_end = encoded_start
+                .checked_add(encoded_byte_len(remainder.len(), self.bit_width)?)
+                .ok_or_else(|| AkitaError::InvalidInput("packed batch end overflow".into()))?;
+            encode_digits(
+                remainder,
+                self.bit_width,
+                storage
+                    .get_mut(encoded_start..encoded_end)
+                    .ok_or(AkitaError::InvalidProof)?,
+            );
+        }
         self.flushed = self
             .flushed
             .checked_add(self.staging.len())
@@ -430,6 +532,16 @@ impl<'a> PackedSignedDigitView<'a> {
     #[cfg(test)]
     pub(crate) fn block_count(self) -> usize {
         self.len.div_ceil(DIGITS_PER_BLOCK)
+    }
+
+    /// Retain immutable encoded storage without decoding or materializing padding.
+    pub(crate) fn encoded_storage(self) -> (&'a Arc<[u8]>, u8, usize, usize) {
+        (
+            &self.digits.storage,
+            self.digits.bit_width,
+            self.start,
+            self.digits.len,
+        )
     }
 
     pub(crate) fn bounds(self) -> SignedDigitBounds {

@@ -40,6 +40,8 @@ mod backend;
 #[cfg(target_os = "macos")]
 mod coefficient_packing;
 #[cfg(target_os = "macos")]
+mod digit_tree;
+#[cfg(target_os = "macos")]
 mod field;
 #[cfg(target_os = "macos")]
 mod onehot;
@@ -52,6 +54,10 @@ mod packed_onehot_fp128_d512;
 #[cfg(target_os = "macos")]
 mod prepared;
 #[cfg(target_os = "macos")]
+mod recursive_commit;
+#[cfg(target_os = "macos")]
+mod recursive_fold;
+#[cfg(target_os = "macos")]
 mod ring_switch;
 #[cfg(target_os = "macos")]
 #[expect(
@@ -60,6 +66,10 @@ mod ring_switch;
     reason = "runtime retains unported operation routes; dispatch methods bind each kernel ABI"
 )]
 mod runtime;
+#[cfg(target_os = "macos")]
+mod sparse_high_half;
+#[cfg(target_os = "macos")]
+mod witness_pack;
 
 #[cfg(target_os = "macos")]
 pub use backend::{MetalBackend, MetalCommitMetrics, MetalOpeningMetrics};
@@ -93,3 +103,15 @@ mod unsupported {
 
 #[cfg(not(target_os = "macos"))]
 pub use unsupported::MetalBackend;
+
+#[cfg(all(test, target_os = "macos"))]
+mod recursive_fold_admission_tests;
+
+#[cfg(all(test, target_os = "macos"))]
+mod packed_commit_admission_tests;
+
+#[cfg(all(test, target_os = "macos"))]
+mod setup_contraction_admission_tests;
+
+#[cfg(target_os = "macos")]
+mod setup_contractions;

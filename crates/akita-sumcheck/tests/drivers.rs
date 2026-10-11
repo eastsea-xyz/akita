@@ -68,12 +68,16 @@ impl EqFactoredSumcheckInstanceProver<F> for ToyEqFactoredInstance {
         self.split_eq.current_tau()
     }
 
-    fn compute_round_eq_factored(&mut self, _round: usize) -> EqFactoredUniPoly<F> {
-        EqFactoredUniPoly::from_q_coeffs(self.q_coeffs.clone())
+    fn compute_round_eq_factored(
+        &mut self,
+        _round: usize,
+    ) -> Result<EqFactoredUniPoly<F>, AkitaError> {
+        Ok(EqFactoredUniPoly::from_q_coeffs(self.q_coeffs.clone()))
     }
 
-    fn ingest_challenge(&mut self, _round: usize, r_round: F) {
+    fn ingest_challenge(&mut self, _round: usize, r_round: F) -> Result<(), AkitaError> {
         self.split_eq.bind(r_round);
+        Ok(())
     }
 }
 
@@ -250,7 +254,10 @@ impl EqFactoredSumcheckInstanceProver<F> for ToyTwoRoundEqFactoredInstance {
         self.split_eq.current_tau()
     }
 
-    fn compute_round_eq_factored(&mut self, round: usize) -> EqFactoredUniPoly<F> {
+    fn compute_round_eq_factored(
+        &mut self,
+        round: usize,
+    ) -> Result<EqFactoredUniPoly<F>, AkitaError> {
         let [a, b, c, d] = self.coefficients;
         let coefficients = if round == 0 {
             vec![a + c * self.tau[1], b + d * self.tau[1]]
@@ -258,14 +265,15 @@ impl EqFactoredSumcheckInstanceProver<F> for ToyTwoRoundEqFactoredInstance {
             let r_0 = self.first_challenge.unwrap();
             vec![a + b * r_0, c + d * r_0]
         };
-        EqFactoredUniPoly::from_q_coeffs(coefficients)
+        Ok(EqFactoredUniPoly::from_q_coeffs(coefficients))
     }
 
-    fn ingest_challenge(&mut self, round: usize, challenge: F) {
+    fn ingest_challenge(&mut self, round: usize, challenge: F) -> Result<(), AkitaError> {
         if round == 0 {
             self.first_challenge = Some(challenge);
         }
         self.split_eq.bind(challenge);
+        Ok(())
     }
 }
 

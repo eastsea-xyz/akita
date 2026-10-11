@@ -11,7 +11,7 @@ using namespace metal;
 #define RECURSIVE_COMMIT_THREADS 1024u
 #define SIMD_RECURSIVE_COMMIT_THREADS 512u
 #define RECURSIVE_COMMIT_BLOCKS_PER_GROUP 16u
-#define RECURSIVE_COMMIT_MAX_D 128u
+#define RECURSIVE_COMMIT_MAX_D 512u
 #define D512_PACKING_TILES_PER_CHUNK 32u
 #define RECURSIVE_COMMIT_MAX_ROWS 8u
 
@@ -182,6 +182,12 @@ struct D512LinearRelationParams {
     ulong rhs_abs_bound;
 };
 
+struct MatrixSpectrumLayout {
+    ulong prime_stride;
+    ulong ring_stride;
+    ulong frequency_offset;
+};
+
 struct RecursiveCommitParams {
     ulong num_blocks;
     ulong blocks_per_group;
@@ -194,6 +200,20 @@ struct RecursiveCommitParams {
     ulong output_coefficients;
     ulong rhs_abs_bound;
 };
+
+struct PackedRecursiveCommitParams {
+    ulong stored_coefficients;
+    ulong physical_coefficients;
+    ulong ring_d;
+    ulong bit_width;
+    ulong num_digits;
+    ulong log_basis;
+    AkitaFp128 threshold;
+};
+
+inline int akita_packed_recursive_commit_digit(
+    device const char* source, constant RecursiveCommitParams& matrix,
+    constant PackedRecursiveCommitParams& packed, ulong expanded_index);
 
 struct D512LinearNttPrime {
     int p;
@@ -2187,6 +2207,7 @@ kernel void akita_fp128_recursive_commit_matvec_barrier_reference(
     device const int *psi_pows [[buffer(6)]],
     device const int *inverse_scale [[buffer(7)]],
     constant RecursiveCommitParams &params [[buffer(8)]],
+    constant MatrixSpectrumLayout &layout [[buffer(10)]],
     uint thread_index [[thread_index_in_threadgroup]],
     uint3 threadgroup_index [[threadgroup_position_in_grid]])
 {
@@ -2215,8 +2236,8 @@ kernel void akita_fp128_recursive_commit_matvec_barrier_reference(
             uint row = thread_index / ring_d;
             uint matrix_coefficient = thread_index - row * ring_d;
             ulong matrix_ring = (ulong)row * params.num_cols + column;
-            ulong matrix_index = ((ulong)prime_index * params.matrix_rings + matrix_ring)
-                * params.ring_d + (ulong)matrix_coefficient;
+            ulong matrix_index = (ulong)prime_index * layout.prime_stride
+                + matrix_ring * layout.ring_stride + layout.frequency_offset + (ulong)matrix_coefficient;
             matrix_values[thread_index] = matrix_ntt[matrix_index];
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -2329,6 +2350,8 @@ kernel void akita_fp128_recursive_commit_matvec(
     device const int *psi_pows [[buffer(6)]],
     device const int *inverse_scale [[buffer(7)]],
     constant RecursiveCommitParams &params [[buffer(8)]],
+    constant PackedRecursiveCommitParams &packed [[buffer(9)]],
+    constant MatrixSpectrumLayout &layout [[buffer(10)]],
     uint thread_index [[thread_index_in_threadgroup]],
     uint3 threadgroup_index [[threadgroup_position_in_grid]])
 {
@@ -2358,7 +2381,7 @@ kernel void akita_fp128_recursive_commit_matvec(
             if (live) {
                 ulong source_index = (block * params.num_cols + column)
                     * params.ring_d + (ulong)coefficient;
-                digit = (int)digits[source_index];
+                digit = akita_packed_recursive_commit_digit(digits, params, packed, source_index);
             }
             values[register_index] = d512_ntt_mul(
                 d512_i32_to_mont(digit, prime),
@@ -2414,8 +2437,8 @@ kernel void akita_fp128_recursive_commit_matvec(
         if (live) {
             for (uint row = 0u; row < (uint)params.num_rows; ++row) {
                 ulong matrix_ring = (ulong)row * params.num_cols + column;
-                ulong matrix_base = ((ulong)prime_index * params.matrix_rings + matrix_ring)
-                    * params.ring_d;
+                ulong matrix_base = (ulong)prime_index * layout.prime_stride
+                    + matrix_ring * layout.ring_stride + layout.frequency_offset;
                 for (uint register_index = 0u;
                      register_index < register_count;
                      ++register_index) {

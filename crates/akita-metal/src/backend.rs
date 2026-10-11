@@ -7,28 +7,26 @@ use akita_algebra::CyclotomicRing;
 use akita_error::AkitaError;
 use akita_prover::backend::{
     DenseBatchView, DenseView, MultilinearPolynomialBatchView, MultilinearPolynomialView,
-    OneHotBatchView, OneHotView, RecursiveFoldView,
+    OneHotBatchView, OneHotView,
 };
 use akita_prover::compute::{
     CompressionComputeBackend, CompressionRowsProducts, DecomposeFoldBatchPlan, DecomposeFoldPlan,
     OpeningBatchKernel, OpeningFoldKernel, OpeningFoldOutput, OpeningFoldPlan,
-    SubringCoefficientPackingBatchKernel, SubringCoefficientPackingPartials,
-    SubringCoefficientPackingPlan,
 };
 use akita_prover::{
     BatchDecomposeFoldOutcome, ComputeBackendSetup, CpuBackend, CyclicRowsComputeBackend,
     DecomposeFoldWitness, DigitRowsComputeBackend, DirectDigitRangeProofBackend,
     DirectDigitRangeProofInput, DirectRelationRangePreparationInput,
     DirectRelationRangeProofBackend, DirectRelationRangeProofOutput, DirectRelationRangeProofState,
-    NttCacheOwnerId, NttOperationCluster, OneHotIndex, RecursiveFoldBatchView,
-    RelationRangeImageProver, RoutedNttRequirement, SuffixWitnessBatchView, SuffixWitnessView,
+    NttCacheOwnerId, NttOperationCluster, OneHotIndex, RelationRangeImageProver,
+    RoutedNttRequirement,
 };
 use akita_sumcheck::{
     CompressedUniPoly, EqFactoredSumcheckProof, EqFactoredUniPoly, SumcheckProof,
 };
 use akita_transcript::labels;
 use akita_types::{AkitaExpandedSetup, AkitaStage1Proof, AkitaStage1StageProof, NttCacheKey};
-use jolt_field::{ExtField, Zero};
+use jolt_field::Zero;
 use metal::Device;
 
 use crate::field::F;
@@ -572,6 +570,20 @@ impl MetalBackend {
 }
 
 impl DirectDigitRangeProofBackend<F, F> for MetalBackend {
+    fn class_indexed_digit_tree_factory(
+        &self,
+        _prepared: &Self::PreparedSetup,
+        domain_len: usize,
+        basis: usize,
+    ) -> Result<
+        Option<
+            Arc<dyn akita_prover::protocol::sumcheck::digit_range::ClassIndexedDigitTreeFactory<F>>,
+        >,
+        AkitaError,
+    > {
+        self.digit_tree_factory(domain_len, basis)
+    }
+
     fn prove_direct_digit_range<T>(
         &self,
         prepared: &Self::PreparedSetup,
@@ -1167,6 +1179,14 @@ impl DirectRelationRangeProofBackend<F, F> for MetalBackend {
 impl ComputeBackendSetup<F> for MetalBackend {
     type PreparedSetup = MetalPreparedSetup;
 
+    fn contract_setup_columns<E: akita_types::FpExtEncoding<F>>(
+        &self,
+        prepared: &Self::PreparedSetup,
+        plans: &[akita_prover::compute::SetupColumnContractionPlan<'_, E>],
+    ) -> Result<Option<Vec<Vec<E>>>, AkitaError> {
+        self.scalar_setup_contractions(prepared, plans)
+    }
+
     fn prepare_expanded(
         &self,
         expanded: Arc<AkitaExpandedSetup<F>>,
@@ -1245,6 +1265,22 @@ impl CompressionComputeBackend<F> for MetalBackend {
 }
 
 impl DigitRowsComputeBackend<F> for MetalBackend {
+    fn pack_centered_witness_z<const D: usize>(
+        &self,
+        centered: &[i32],
+        fold_planes: usize,
+        log_basis: u32,
+        bit_width: u8,
+    ) -> Result<Option<akita_prover::compute::PackedWitnessZ>, AkitaError> {
+        MetalBackend::pack_centered_witness_z::<D>(
+            self,
+            centered,
+            fold_planes,
+            log_basis,
+            bit_width,
+        )
+    }
+
     fn digit_rows<const D: usize>(
         &self,
         prepared: &Self::PreparedSetup,
@@ -1391,49 +1427,11 @@ macro_rules! delegate_indexed_opening_pair_to_cpu {
 }
 
 delegate_opening_pair_to_cpu!(DenseView<'_, F, D>, DenseBatchView<'_, F, D>);
-delegate_opening_pair_to_cpu!(
-    RecursiveFoldView<'_, F, D>,
-    RecursiveFoldBatchView<'_, F, D>
-);
-delegate_opening_pair_to_cpu!(
-    SuffixWitnessView<'_, F, D>,
-    SuffixWitnessBatchView<'_, F, D>
-);
 delegate_indexed_opening_pair_to_cpu!(OneHotView<'_, F, D, I>, OneHotBatchView<'_, F, D, I>);
 delegate_indexed_opening_pair_to_cpu!(
     MultilinearPolynomialView<'_, F, D, I>,
     MultilinearPolynomialBatchView<'_, F, D, I>
 );
-
-macro_rules! delegate_coefficient_packing_to_cpu {
-    ($view:ident) => {
-        impl<E, const D: usize> SubringCoefficientPackingBatchKernel<$view<'_, F, D>, F, E, D>
-            for MetalBackend
-        where
-            E: ExtField<F>,
-            CpuBackend: for<'a> SubringCoefficientPackingBatchKernel<$view<'a, F, D>, F, E, D>,
-        {
-            fn coefficient_packing_partials_batch(
-                &self,
-                prepared: Option<&Self::PreparedSetup>,
-                source: $view<'_, F, D>,
-                plan: SubringCoefficientPackingPlan<'_, E>,
-            ) -> Result<Vec<SubringCoefficientPackingPartials<F>>, AkitaError> {
-                let output = self.cpu_backend().coefficient_packing_partials_batch(
-                    prepared.map(|prepared| &prepared.cpu),
-                    source,
-                    plan,
-                )?;
-                self.record_opening_cpu_fallback(1)
-                    .map_err(MetalCommitError::into_akita)?;
-                Ok(output)
-            }
-        }
-    };
-}
-
-delegate_coefficient_packing_to_cpu!(RecursiveFoldBatchView);
-delegate_coefficient_packing_to_cpu!(SuffixWitnessBatchView);
 
 #[cfg(test)]
 mod tests;

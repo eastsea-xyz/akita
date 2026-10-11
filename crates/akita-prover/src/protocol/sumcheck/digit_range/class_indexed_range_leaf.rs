@@ -1,12 +1,20 @@
 //! Class-indexed range-polynomial leaf prover.
 
 use super::class_indexed_state::ClassIndexedTableState;
+use super::class_indexed_state::{
+    ClassIndexedHostStage, CompactDigitTreeLutBuilder, CompactDigitTreeSecondRoundLuts,
+    ResidentDigitTreeState,
+};
 use super::compact_digit_source::CompactDigitSource;
 use super::exact_prefix::ExactPrefixTable;
 use super::range_class_tables::{
     FoldedRangeImagePairTable, OrderedRangePairCoefficients, SecondRoundRangeQuartetCoefficients,
 };
 use super::round_accumulation::accumulate_equality_weighted_round;
+use super::rounds::{
+    ClassIndexedDigitTreeCompactStageInput, ClassIndexedDigitTreeFactory,
+    ClassIndexedDigitTreeInput, ClassIndexedDigitTreeRound, ClassIndexedDigitTreeSession,
+};
 use super::{
     compose_small_poly_with_affine, MAX_QUARTET_TABLE_CLASS_COUNT, MAX_TREE_STAGE_Q_DEGREE,
 };
@@ -216,12 +224,17 @@ impl<E: Field + Ring + Fold + Unreduced> EqFactoredSumcheckInstanceProver<E>
         self.split_eq.current_tau()
     }
 
-    fn compute_round_eq_factored(&mut self, round: usize) -> EqFactoredUniPoly<E> {
+    fn compute_round_eq_factored(
+        &mut self,
+        round: usize,
+    ) -> Result<EqFactoredUniPoly<E>, AkitaError> {
         let coefficients = self.round_q_coefficients(round);
-        EqFactoredUniPoly::from_q_coeffs(coefficients[..=self.degree_bound()].to_vec())
+        Ok(EqFactoredUniPoly::from_q_coeffs(
+            coefficients[..=self.degree_bound()].to_vec(),
+        ))
     }
 
-    fn ingest_challenge(&mut self, round: usize, challenge: E) {
+    fn ingest_challenge(&mut self, round: usize, challenge: E) -> Result<(), AkitaError> {
         debug_assert_eq!(round, self.rounds_completed);
         self.split_eq.bind(challenge);
         if self.rounds_completed == 0 && self.num_rounds >= 2 {
@@ -276,7 +289,7 @@ impl<E: Field + Ring + Fold + Unreduced> EqFactoredSumcheckInstanceProver<E>
             if let Some(deferred) = deferred {
                 self.range_image = deferred;
                 self.rounds_completed += 1;
-                return;
+                return Ok(());
             }
         }
 
@@ -319,7 +332,7 @@ impl<E: Field + Ring + Fold + Unreduced> EqFactoredSumcheckInstanceProver<E>
             if let Some(table) = folded_after_two_rounds {
                 self.range_image = RangeImageTableState::Materialized(table);
                 self.rounds_completed += 1;
-                return;
+                return Ok(());
             }
         }
 
@@ -375,5 +388,124 @@ impl<E: Field + Ring + Fold + Unreduced> EqFactoredSumcheckInstanceProver<E>
                 .expect("validated exact-prefix range-image state can fold");
         }
         self.rounds_completed += 1;
+        Ok(())
+    }
+}
+
+impl<E: Field + Ring + Fold + Unreduced> ClassIndexedHostStage<E>
+    for ClassIndexedRangeLeafProver<E>
+{
+    fn start_compact(
+        &self,
+        factory: &dyn ClassIndexedDigitTreeFactory<E>,
+    ) -> Result<Option<Box<dyn ClassIndexedDigitTreeSession<E>>>, AkitaError> {
+        let RangeImageTableState::Compact(compact) = &self.range_image else {
+            return Ok(None);
+        };
+        if compact.source.quartet_count() < 4_096 {
+            return Ok(None);
+        }
+        let padding = [E::zero()];
+        factory.start_compact(ClassIndexedDigitTreeCompactStageInput {
+            pair_coefficients: compact.pair_coefficients.rows(),
+            padding: &padding,
+            round: ClassIndexedDigitTreeRound::RangeLeaf {
+                coefficients: self.polynomial_coefficients.clone(),
+            },
+        })
+    }
+
+    fn into_compact(
+        self,
+        session: Box<dyn ClassIndexedDigitTreeSession<E>>,
+    ) -> Result<ResidentDigitTreeState<E>, AkitaError> {
+        let Self {
+            range_image,
+            split_eq,
+            polynomial_coefficients,
+            ..
+        } = self;
+        let RangeImageTableState::Compact(compact) = range_image else {
+            return Err(AkitaError::InvalidProof);
+        };
+        Ok(ResidentDigitTreeState {
+            session,
+            split_eq,
+            explicit_len: compact.source.live_len(),
+            domain_len: compact.source.domain_len(),
+            lanes: 1,
+            next_round: 0,
+            final_value: None,
+            compact_luts: Some(Box::new(CompactDigitTreeLutBuilder {
+                nodes: Vec::new(),
+                class_count: compact.source.class_count(),
+                coefficients: polynomial_coefficients,
+                arity: 0,
+                prepare: prepare_range_compact_luts::<E>,
+            })),
+        })
+    }
+
+    fn can_start_resident(&self) -> bool {
+        self.rounds_completed == 2
+            && matches!(&self.range_image, RangeImageTableState::Materialized(table) if table.explicit_len() >= 4_096 && table.domain_len() >= 2)
+    }
+
+    fn into_resident(
+        self,
+        factory: &dyn ClassIndexedDigitTreeFactory<E>,
+    ) -> Result<ResidentDigitTreeState<E>, AkitaError> {
+        let Self {
+            range_image,
+            split_eq,
+            polynomial_coefficients,
+            rounds_completed,
+            ..
+        } = self;
+        let RangeImageTableState::Materialized(table) = range_image else {
+            return Err(AkitaError::InvalidProof);
+        };
+        let padding = [table.default_value()];
+        let session = factory.start(ClassIndexedDigitTreeInput {
+            domain_len: table.domain_len(),
+            explicit: table.explicit_values(),
+            padding: &padding,
+            round: ClassIndexedDigitTreeRound::RangeLeaf {
+                coefficients: polynomial_coefficients,
+            },
+        })?;
+        Ok(ResidentDigitTreeState {
+            session,
+            split_eq,
+            explicit_len: table.explicit_len(),
+            domain_len: table.domain_len(),
+            lanes: 1,
+            next_round: rounds_completed,
+            final_value: None,
+            compact_luts: None,
+        })
+    }
+
+    fn host_final_values(&self) -> Result<Vec<E>, AkitaError> {
+        self.range_image
+            .final_value()
+            .map(|value| vec![value])
+            .ok_or(AkitaError::InvalidProof)
+    }
+}
+
+fn prepare_range_compact_luts<E: Field + Ring + Fold>(
+    input: &CompactDigitTreeLutBuilder<E>,
+    challenge: E,
+) -> CompactDigitTreeSecondRoundLuts<E> {
+    let folded = FoldedRangeImagePairTable::new(input.class_count, challenge);
+    let quartet_coefficients = (input.class_count == MAX_QUARTET_TABLE_CLASS_COUNT).then(|| {
+        SecondRoundRangeQuartetCoefficients::new(&folded, &input.coefficients)
+            .rows()
+            .to_vec()
+    });
+    CompactDigitTreeSecondRoundLuts {
+        folded_pairs: folded.rows().to_vec(),
+        quartet_coefficients,
     }
 }

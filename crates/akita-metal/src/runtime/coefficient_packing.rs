@@ -450,3 +450,7 @@ impl MetalRuntime {
         })
     }
 }
+
+#[path = "field_packing.rs"]
+mod field_packing;
+pub(crate) use field_packing::{FieldCoefficientPackingParams, FieldPackingSource};

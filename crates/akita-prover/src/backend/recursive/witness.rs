@@ -122,6 +122,15 @@ impl RecursiveWitnessFlat {
         self.digits.iter()
     }
 
+    /// Borrow exact encoded digits without expanding the implicit commitment suffix.
+    pub fn packed_digit_storage(&self) -> (&[u8], u8, usize) {
+        (
+            self.digits.encoded_bytes(),
+            self.digits.bit_width(),
+            self.digits.len(),
+        )
+    }
+
     pub fn live_coeff_len(&self) -> usize {
         self.live_coeff_len
     }
@@ -212,12 +221,44 @@ impl<'a, F: Field, const D: usize> SuffixWitnessView<'a, F, D> {
         self.digits.get(index)
     }
 
+    /// Retain exact packed storage and physical/live extents for an opening kernel.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a sliced view whose encoded source starts at a nonzero digit.
+    #[expect(
+        clippy::type_complexity,
+        reason = "one checked boundary carries packed storage and exact extents"
+    )]
+    pub fn packed_fold_storage(
+        &self,
+    ) -> Result<(std::sync::Arc<[u8]>, u8, usize, usize, usize), AkitaError> {
+        let (owner, width, start, stored) = self.digits.encoded_storage();
+        if start != 0 {
+            return Err(AkitaError::InvalidInput(
+                "recursive packed opening source starts at a nonzero digit".into(),
+            ));
+        }
+        Ok((
+            owner.clone(),
+            width,
+            stored,
+            self.digits.len(),
+            self.live_ring_elems,
+        ))
+    }
+
     pub fn num_ring_elems(&self) -> usize {
         self.padded_ring_elems
     }
 
+    /// Signed coefficients, including the physical commitment padding.
+    pub fn digits(&self) -> impl ExactSizeIterator<Item = i8> + '_ {
+        self.digits.iter()
+    }
+
     #[inline]
-    fn num_live_blocks(&self, num_positions_per_block: usize) -> Result<usize, AkitaError> {
+    pub fn num_live_blocks(&self, num_positions_per_block: usize) -> Result<usize, AkitaError> {
         if num_positions_per_block == 0 || self.digits.len() == 0 {
             return Err(AkitaError::InvalidInput(
                 "recursive witness requires positive exact block geometry".into(),
@@ -434,6 +475,13 @@ fn padded_ring_elems_for_live_len<const D: usize>(live_coeff_len: usize) -> usiz
 pub struct SuffixWitnessBatchView<'a, F: Field, const D: usize> {
     polys: &'a [&'a RecursiveWitnessFlat],
     _marker: PhantomData<F>,
+}
+
+impl<'a, F: Field, const D: usize> SuffixWitnessBatchView<'a, F, D> {
+    /// Borrow immutable recursive witnesses in protocol order.
+    pub fn polys(self) -> &'a [&'a RecursiveWitnessFlat] {
+        self.polys
+    }
 }
 
 impl<F, const D: usize> RootPolyShape<F, D> for RecursiveWitnessFlat
@@ -777,6 +825,26 @@ where
 mod tests {
     use super::*;
     use jolt_field::Prime128OffsetA7F7 as F;
+
+    #[test]
+    fn packed_digit_storage_retains_implicit_commitment_suffix_without_expansion() {
+        const D: usize = 128;
+        let original = RecursiveWitnessFlat::from_i8_digits(vec![-4, -1, 0, 3, 2]);
+        let aligned = original.clone().align_for_commitment_ring_dim(D).unwrap();
+        let (bytes, width, stored) = aligned.packed_digit_storage();
+        assert_eq!(width, 3);
+        assert_eq!(stored, 5);
+        assert_eq!(bytes.len(), 2);
+        assert_eq!(bytes.as_ptr(), original.packed_digit_storage().0.as_ptr());
+        assert_eq!(aligned.live_coeff_len(), 5);
+        assert_eq!(
+            aligned.view::<F, D>().unwrap().digits().collect::<Vec<_>>(),
+            [-4, -1, 0, 3, 2]
+                .into_iter()
+                .chain(std::iter::repeat_n(0, D - 5))
+                .collect::<Vec<_>>()
+        );
+    }
 
     #[test]
     fn suffix_opening_views_share_packed_digit_storage() {

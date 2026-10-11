@@ -39,7 +39,7 @@ where
     /// # Errors
     ///
     /// Returns an error if any generated round polynomial exceeds the instance's
-    /// degree bound.
+    /// degree bound or the instance fails to compute, bind, or finalize a round.
     #[tracing::instrument(skip_all, name = "prove_eq_factored_sumcheck")]
     #[inline(never)]
     fn prove<F, T, S>(
@@ -62,7 +62,7 @@ where
         transcript.append_serde(labels::ABSORB_SUMCHECK_CLAIM, &claim);
 
         for round in 0..num_rounds {
-            let poly = self.compute_round_eq_factored(round);
+            let poly = self.compute_round_eq_factored(round)?;
             if poly.degree() > degree_bound {
                 return Err(AkitaError::InvalidInput(format!(
                     "eq-factored sumcheck round poly degree {} exceeds bound {}",
@@ -75,11 +75,11 @@ where
             let r_i = sample_challenge(transcript)?;
             claim = advance_eq_factored_claim(claim, self.current_tau(), &poly, r_i);
             challenges.push(r_i);
-            self.ingest_challenge(round, r_i);
+            self.ingest_challenge(round, r_i)?;
             round_polys.push(poly);
         }
 
-        self.finalize();
+        self.finalize()?;
         Ok((EqFactoredSumcheckProof { round_polys }, challenges, claim))
     }
 }
@@ -169,4 +169,93 @@ where
     E: Field,
     Inst: EqFactoredSumcheckInstanceVerifier<E>,
 {
+}
+
+#[cfg(test)]
+mod fallible_backend_tests {
+    use super::*;
+    use akita_transcript::AkitaTranscript;
+    use jolt_field::{One, Prime128OffsetA7F7 as F, Zero};
+
+    #[derive(Clone, Copy)]
+    enum Failure {
+        Round,
+        Bind,
+        Finalize,
+    }
+
+    struct FailingBackendProver {
+        failure: Failure,
+        bound: usize,
+    }
+
+    impl EqFactoredSumcheckInstanceProver<F> for FailingBackendProver {
+        fn num_rounds(&self) -> usize {
+            2
+        }
+        fn degree_bound(&self) -> usize {
+            2
+        }
+        fn input_claim(&self) -> F {
+            F::zero()
+        }
+        fn current_tau(&self) -> F {
+            F::one()
+        }
+        fn compute_round_eq_factored(
+            &mut self,
+            _round: usize,
+        ) -> Result<EqFactoredUniPoly<F>, AkitaError> {
+            if matches!(self.failure, Failure::Round) {
+                Err(AkitaError::InvalidInput(
+                    "test accelerator round failure".into(),
+                ))
+            } else {
+                Ok(EqFactoredUniPoly::from_q_coeffs(vec![F::zero(); 3]))
+            }
+        }
+        fn ingest_challenge(&mut self, _round: usize, _challenge: F) -> Result<(), AkitaError> {
+            if matches!(self.failure, Failure::Bind) {
+                Err(AkitaError::InvalidInput(
+                    "test accelerator bind failure".into(),
+                ))
+            } else {
+                self.bound += 1;
+                Ok(())
+            }
+        }
+        fn finalize(&mut self) -> Result<(), AkitaError> {
+            Err(AkitaError::InvalidInput(
+                "test accelerator finalize failure".into(),
+            ))
+        }
+    }
+
+    #[test]
+    fn accelerator_round_failure_stops_before_challenge_sampling() {
+        assert_failure(Failure::Round, 0, 0);
+    }
+
+    #[test]
+    fn accelerator_bind_failure_stops_before_next_round() {
+        assert_failure(Failure::Bind, 1, 0);
+    }
+
+    #[test]
+    fn accelerator_finalize_failure_is_propagated() {
+        assert_failure(Failure::Finalize, 2, 2);
+    }
+
+    fn assert_failure(failure: Failure, expected_samples: usize, expected_binds: usize) {
+        let mut prover = FailingBackendProver { failure, bound: 0 };
+        let mut transcript = AkitaTranscript::<F>::new(b"eq-factored-fallible-kernel");
+        let mut samples = 0;
+        let result = prover.prove::<F, _, _>(&mut transcript, |_| {
+            samples += 1;
+            Ok(F::one())
+        });
+        assert!(result.is_err());
+        assert_eq!(samples, expected_samples);
+        assert_eq!(prover.bound, expected_binds);
+    }
 }

@@ -21,23 +21,38 @@ use crate::MetalCommitError;
 
 mod buffers;
 mod coefficient_packing;
+pub(crate) use coefficient_packing::{FieldCoefficientPackingParams, FieldPackingSource};
 pub(crate) mod commands;
 mod commit;
+pub(crate) mod digit_tree;
 mod direct_range;
 mod fold;
+mod packed_recursive_commit;
+pub(crate) use packed_recursive_commit::{PackedRecursiveCommitParams, RecursiveCommitInput};
 #[path = "packed_onehot/k16.rs"]
 mod k16;
+mod recursive_fold;
+pub(crate) use recursive_fold::{
+    RecursiveFoldDispatchOutcome, RecursiveFoldParams, RecursiveFoldSource, RecursiveSparseTerm,
+    RecursiveWeightTerm,
+};
 mod relation_prefix;
 mod relation_resident;
 mod relation_rounds;
+mod relation_rows;
 mod relation_setup;
 mod resources;
 mod rows;
+mod setup_contractions;
+pub(crate) mod sparse_high_half;
+pub(crate) use setup_contractions::{SetupContractionInput, SetupContractionParams};
+mod witness_pack;
+pub(crate) use relation_rows::{RelationRowsInput, RelationRowsMode, RelationRowsParams};
 #[cfg(test)]
 mod tests;
 
 use commands::*;
-use resources::{d512_linear_relation_resources, recursive_commit_resources};
+use resources::{linear_relation_resources, recursive_commit_resources};
 
 const DIRECT_KERNEL_NAME: &str = "akita_onehot_commit_gather";
 const BLOCK_BATCHED_KERNEL_NAME: &str = "akita_onehot_commit_block_batched";
@@ -49,6 +64,9 @@ const FP128_D128_SUBRING64_DECOMPOSE_FOLD_KERNEL_NAME: &str =
     "akita_fp128_d128_subring64_decompose_fold";
 const FP128_D64_DIGIT_ROWS_PARTIALS_KERNEL_NAME: &str = "akita_fp128_d64_digit_rows_partials";
 const FP128_D64_DIGIT_ROWS_REDUCE_KERNEL_NAME: &str = "akita_fp128_d64_digit_rows_reduce";
+const FP128_FIELD_COEFFICIENT_PACKING_KERNEL_NAME: &str = "akita_fp128_field_coefficient_packing";
+const FP128_PACKED_DIGIT_COEFFICIENT_PACKING_KERNEL_NAME: &str =
+    "akita_fp128_packed_digit_coefficient_packing";
 const FP128_I8_COEFFICIENT_PACKING_KERNEL_NAME: &str = "akita_fp128_i8_coefficient_packing";
 const FP128_PACKED_ONEHOT_COEFFICIENT_PACKING_PARTIALS_KERNEL_NAME: &str =
     "akita_fp128_packed_onehot_coefficient_packing_partials";
@@ -74,9 +92,16 @@ const FP128_D512_LINEAR_RELATION_REDUCE_KERNEL_NAME: &str =
     "akita_fp128_d512_linear_relation_reduce";
 const FP128_D512_LINEAR_RELATION_RECONSTRUCT_KERNEL_NAME: &str =
     "akita_fp128_d512_linear_relation_reconstruct";
+const FP128_RELATION_ROWS_MATRIX_NTT_KERNEL_NAME: &str = "akita_fp128_relation_rows_matrix_ntt";
+const FP128_RELATION_ROWS_RHS_NTT_KERNEL_NAME: &str = "akita_fp128_relation_rows_rhs_ntt";
+const FP128_RELATION_ROWS_MATVEC_INVERSE_KERNEL_NAME: &str =
+    "akita_fp128_relation_rows_matvec_inverse";
+const FP128_RELATION_ROWS_RECONSTRUCT_KERNEL_NAME: &str = "akita_fp128_relation_rows_reconstruct";
 const FP128_RECURSIVE_COMMIT_MATRIX_NTT_KERNEL_NAME: &str =
     "akita_fp128_recursive_commit_matrix_ntt";
 const FP128_RECURSIVE_COMMIT_MATVEC_KERNEL_NAME: &str = "akita_fp128_recursive_commit_matvec";
+const FP128_RECURSIVE_COMMIT_D512_MATVEC_KERNEL_NAME: &str =
+    "akita_fp128_recursive_commit_d512_matvec";
 const FP128_RECURSIVE_COMMIT_RECONSTRUCT_KERNEL_NAME: &str =
     "akita_fp128_recursive_commit_reconstruct";
 const FP128_DIRECT_RANGE_INITIAL_KERNEL_NAME: &str = "akita_fp128_direct_range_initial_partials";
@@ -114,7 +139,27 @@ const FP128_DIRECT_RELATION_SETUP_SOURCE_KERNEL_NAME: &str =
     "akita_fp128_direct_relation_setup_source";
 const FP128_DIRECT_RELATION_SPARSE_SOURCE_KERNEL_NAME: &str =
     "akita_fp128_direct_relation_sparse_source";
-const KERNEL_SOURCE: &str = include_str!("kernels/onehot.metal");
+const KERNEL_SOURCE: &str = concat!(
+    include_str!("kernels/onehot.metal"),
+    "\n",
+    include_str!("kernels/field_packing.metal"),
+    "\n",
+    include_str!("kernels/digit_tree.metal"),
+    "\n",
+    include_str!("kernels/recursive_commit_d512.metal"),
+    "\n",
+    include_str!("kernels/relation_rows.metal"),
+    "\n",
+    include_str!("kernels/witness_pack.metal"),
+    "\n",
+    include_str!("kernels/recursive_fold.metal"),
+    "\n",
+    include_str!("kernels/packed_recursive_commit.metal"),
+    "\n",
+    include_str!("kernels/sparse_high_half.metal"),
+    "\n",
+    include_str!("kernels/setup_contractions.metal")
+);
 /// Largest D512 panel threadgroup; each GPU gets what its compiled pipeline
 /// allows (register pressure: 640 on M1 Max), rounded down to whole simdgroups.
 const FP128_D512_THREADS: usize = 1_024;
@@ -166,7 +211,7 @@ const FP128_D512_LINEAR_RELATION_RAW_PRIMES: [i32; FP128_D512_LINEAR_RELATION_NU
 ];
 const FP128_RECURSIVE_COMMIT_THREADS: usize = 512;
 const FP128_RECURSIVE_COMMIT_RECONSTRUCT_THREADS: usize = 256;
-const FP128_RECURSIVE_COMMIT_BLOCKS_PER_GROUP: usize = 16;
+pub(crate) const FP128_RECURSIVE_COMMIT_BLOCKS_PER_GROUP: usize = 16;
 const FP128_RECURSIVE_COMMIT_MAX_ROWS: usize = 8;
 
 fn pack_biased_subring64_challenges(dense_challenges: &[i8]) -> Result<Vec<u32>, MetalCommitError> {
@@ -972,6 +1017,9 @@ struct RecursiveCommitResources {
 }
 
 pub(crate) struct MetalRuntime {
+    setup_contraction_pipeline: ComputePipelineState,
+    digit_tree_library: metal::Library,
+    digit_tree_pipelines: std::sync::Mutex<Option<std::sync::Arc<digit_tree::DigitTreePipelines>>>,
     device: Device,
     queue: CommandQueue,
     direct_pipeline: ComputePipelineState,
@@ -981,6 +1029,8 @@ pub(crate) struct MetalRuntime {
     packed_partial_reduction_pipeline: ComputePipelineState,
     fp128_d64_digit_rows_partials_pipeline: ComputePipelineState,
     fp128_d64_digit_rows_reduce_pipeline: ComputePipelineState,
+    fp128_field_coefficient_packing_pipeline: ComputePipelineState,
+    fp128_packed_digit_coefficient_packing_pipeline: ComputePipelineState,
     fp128_i8_coefficient_packing_pipeline: ComputePipelineState,
     fp128_packed_onehot_coefficient_packing_partials_pipeline: ComputePipelineState,
     fp128_packed_onehot_coefficient_packing_reduce_pipeline: ComputePipelineState,
@@ -998,10 +1048,24 @@ pub(crate) struct MetalRuntime {
     fp128_d512_linear_relation_reduce_pipeline: ComputePipelineState,
     fp128_d512_linear_relation_reconstruct_pipeline: ComputePipelineState,
     fp128_d512_linear_relation_resources: D512LinearRelationResources,
+    fp128_relation_rows_small_resources: [D512LinearRelationResources; 3],
+    fp128_relation_rows_matrix_ntt_pipeline: ComputePipelineState,
+    fp128_relation_rows_rhs_ntt_pipeline: ComputePipelineState,
+    fp128_relation_rows_matvec_inverse_pipeline: ComputePipelineState,
+    fp128_relation_rows_reconstruct_pipeline: ComputePipelineState,
+    sparse_high_half_pipeline: ComputePipelineState,
+    witness_pack_pipeline: ComputePipelineState,
+    recursive_evaluate_fold_pipeline: ComputePipelineState,
+    recursive_fold_evaluation_pipeline: ComputePipelineState,
+    recursive_balanced_planes_pipeline: ComputePipelineState,
+    recursive_sparse_fold_pipeline: ComputePipelineState,
+    recursive_sparse_batch_reduce_pipeline: ComputePipelineState,
+    recursive_packed_cache: std::sync::Mutex<Vec<recursive_fold::RecursivePackedCacheEntry>>,
     fp128_recursive_commit_matrix_ntt_pipeline: ComputePipelineState,
     fp128_recursive_commit_matvec_pipeline: ComputePipelineState,
+    fp128_recursive_commit_d512_matvec_pipeline: ComputePipelineState,
     fp128_recursive_commit_reconstruct_pipeline: ComputePipelineState,
-    fp128_recursive_commit_resources: [RecursiveCommitResources; 2],
+    fp128_recursive_commit_resources: [RecursiveCommitResources; 4],
     fp128_direct_range_initial_pipeline: ComputePipelineState,
     fp128_direct_range_compact_fold_pipeline: ComputePipelineState,
     fp128_direct_range_field_fold_pipeline: ComputePipelineState,
@@ -1044,12 +1108,21 @@ impl MetalRuntime {
                 .new_compute_pipeline_state_with_function(&function)
                 .map_err(|message| MetalCommitError::PipelineCompilation { name, message })
         };
-        let fp128_d512_linear_relation_resources = d512_linear_relation_resources(&device);
+        let fp128_d512_linear_relation_resources = linear_relation_resources(&device, 1024);
+        let fp128_relation_rows_small_resources = [
+            linear_relation_resources(&device, 128),
+            linear_relation_resources(&device, 256),
+            linear_relation_resources(&device, 512),
+        ];
         let fp128_recursive_commit_resources = [
             recursive_commit_resources(&device, 64),
             recursive_commit_resources(&device, 128),
+            recursive_commit_resources(&device, 256),
+            recursive_commit_resources(&device, 512),
         ];
         Ok(Self {
+            digit_tree_library: library.clone(),
+            digit_tree_pipelines: std::sync::Mutex::new(None),
             queue: device.new_command_queue(),
             direct_pipeline: pipeline(DIRECT_KERNEL_NAME)?,
             block_batched_pipeline: pipeline(BLOCK_BATCHED_KERNEL_NAME)?,
@@ -1061,6 +1134,13 @@ impl MetalRuntime {
             )?,
             fp128_d64_digit_rows_reduce_pipeline: pipeline(
                 FP128_D64_DIGIT_ROWS_REDUCE_KERNEL_NAME,
+            )?,
+            setup_contraction_pipeline: pipeline("akita_fp128_setup_column_contractions")?,
+            fp128_field_coefficient_packing_pipeline: pipeline(
+                FP128_FIELD_COEFFICIENT_PACKING_KERNEL_NAME,
+            )?,
+            fp128_packed_digit_coefficient_packing_pipeline: pipeline(
+                FP128_PACKED_DIGIT_COEFFICIENT_PACKING_KERNEL_NAME,
             )?,
             fp128_i8_coefficient_packing_pipeline: pipeline(
                 FP128_I8_COEFFICIENT_PACKING_KERNEL_NAME,
@@ -1107,11 +1187,37 @@ impl MetalRuntime {
                 FP128_D512_LINEAR_RELATION_RECONSTRUCT_KERNEL_NAME,
             )?,
             fp128_d512_linear_relation_resources,
+            fp128_relation_rows_small_resources,
+            fp128_relation_rows_matrix_ntt_pipeline: pipeline(
+                FP128_RELATION_ROWS_MATRIX_NTT_KERNEL_NAME,
+            )?,
+            fp128_relation_rows_rhs_ntt_pipeline: pipeline(
+                FP128_RELATION_ROWS_RHS_NTT_KERNEL_NAME,
+            )?,
+            fp128_relation_rows_matvec_inverse_pipeline: pipeline(
+                FP128_RELATION_ROWS_MATVEC_INVERSE_KERNEL_NAME,
+            )?,
+            fp128_relation_rows_reconstruct_pipeline: pipeline(
+                FP128_RELATION_ROWS_RECONSTRUCT_KERNEL_NAME,
+            )?,
+            sparse_high_half_pipeline: pipeline("akita_fp128_sparse_product_high_half_batch")?,
+            witness_pack_pipeline: pipeline("akita_centered_witness_z_pack")?,
+            recursive_evaluate_fold_pipeline: pipeline("akita_fp128_recursive_evaluate_fold")?,
+            recursive_fold_evaluation_pipeline: pipeline("akita_fp128_recursive_fold_evaluation")?,
+            recursive_balanced_planes_pipeline: pipeline("akita_fp128_recursive_balanced_planes")?,
+            recursive_sparse_fold_pipeline: pipeline("akita_fp128_recursive_sparse_fold")?,
+            recursive_sparse_batch_reduce_pipeline: pipeline(
+                "akita_recursive_sparse_batch_reduce",
+            )?,
+            recursive_packed_cache: std::sync::Mutex::new(Vec::new()),
             fp128_recursive_commit_matrix_ntt_pipeline: pipeline(
                 FP128_RECURSIVE_COMMIT_MATRIX_NTT_KERNEL_NAME,
             )?,
             fp128_recursive_commit_matvec_pipeline: pipeline(
                 FP128_RECURSIVE_COMMIT_MATVEC_KERNEL_NAME,
+            )?,
+            fp128_recursive_commit_d512_matvec_pipeline: pipeline(
+                FP128_RECURSIVE_COMMIT_D512_MATVEC_KERNEL_NAME,
             )?,
             fp128_recursive_commit_reconstruct_pipeline: pipeline(
                 FP128_RECURSIVE_COMMIT_RECONSTRUCT_KERNEL_NAME,

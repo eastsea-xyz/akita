@@ -2,7 +2,7 @@ use super::*;
 use crate::backend::packed_digits::PackedSignedDigitWriter;
 #[cfg(feature = "response-model-diagnostics")]
 use crate::backend::packed_digits::PackedSignedDigits;
-use crate::compute::{OperationCtx, RuntimeRingSwitchProveBackend};
+use crate::compute::{DigitRowsComputeBackend, OperationCtx, RuntimeRingSwitchProveBackend};
 use crate::kernels::linear::decompose_commit_blocks_into;
 use crate::protocol::ring_relation::{
     validate_chunked_witness_cfg, CompressionSourceId, CompressionWitnessMaterialization,
@@ -205,12 +205,16 @@ fn trace_witness_source_moments(
 }
 
 /// Emit one physical `[Z | E | T]` ownership unit directly into packed storage.
-fn emit_witness_unit<F: Field + CanonicalEncoding>(
+fn emit_witness_unit<
+    F: Field + CanonicalEncoding,
+    B: RuntimeRingSwitchProveBackend<F> + DigitRowsComputeBackend<F>,
+>(
     out: &mut PackedSignedDigitWriter,
     unit: &WitnessUnitLayout,
     group: &PreparedRingSwitchGroup<F>,
     num_claims: usize,
     expected_chunks: usize,
+    backend: &B,
 ) -> Result<(), AkitaError> {
     let num_digits_fold = group.params.num_digits_fold();
     {
@@ -220,7 +224,14 @@ fn emit_witness_unit<F: Field + CanonicalEncoding>(
             F,
             group.role_dims.d_a(),
             |D_G| {
-                emit_unit_z_segment::<D_G>(out, unit, group, num_digits_fold, expected_chunks)
+                emit_unit_z_segment::<D_G, F, B>(
+                    out,
+                    unit,
+                    group,
+                    num_digits_fold,
+                    expected_chunks,
+                    backend,
+                )
             }
         )?;
     }
@@ -298,22 +309,23 @@ fn emit_witness_unit<F: Field + CanonicalEncoding>(
     Ok(())
 }
 
-fn emit_unit_z_segment<const D: usize>(
+fn emit_unit_z_segment<
+    const D: usize,
+    F: Field + CanonicalEncoding,
+    B: RuntimeRingSwitchProveBackend<F> + DigitRowsComputeBackend<F>,
+>(
     out: &mut PackedSignedDigitWriter,
     unit: &WitnessUnitLayout,
-    group: &PreparedRingSwitchGroup<impl Field + CanonicalEncoding>,
+    group: &PreparedRingSwitchGroup<F>,
     num_digits_fold: usize,
     expected_chunks: usize,
+    backend: &B,
 ) -> Result<(), AkitaError> {
     let z_centered = group.z_folded_coefficients.chunk(
         &group.z_centered,
         expected_chunks,
         unit.chunk_index(),
     )?;
-    let z_planes = {
-        let _span = tracing::info_span!("ring_switch_decompose_z_planes").entered();
-        decompose_z_folded_planes::<D>(z_centered, num_digits_fold, group.params.log_basis_open())?
-    };
     let expected_planes = group
         .params
         .num_positions_per_block()
@@ -321,12 +333,51 @@ fn emit_unit_z_segment<const D: usize>(
         .and_then(|count| count.checked_mul(num_digits_fold))
         .ok_or_else(|| AkitaError::InvalidSetup("witness Z plane count overflow".into()))?;
     let range = unit.z_range();
-    if z_planes.len() != expected_planes || z_planes.as_flattened().len() != range.len() {
+    let expected_digits = expected_planes
+        .checked_mul(D)
+        .ok_or_else(|| AkitaError::InvalidSetup("witness Z digit count overflow".into()))?;
+    let actual_digits = z_centered
+        .len()
+        .checked_mul(num_digits_fold)
+        .ok_or_else(|| {
+            AkitaError::InvalidSetup("witness Z centered digit count overflow".into())
+        })?;
+    if !z_centered.len().is_multiple_of(D)
+        || actual_digits != expected_digits
+        || expected_digits != range.len()
+    {
         return Err(AkitaError::InvalidSize {
             expected: range.len(),
-            actual: z_planes.as_flattened().len(),
+            actual: actual_digits,
         });
     }
+    {
+        let _span = tracing::info_span!("ring_switch_pack_z_planes").entered();
+        if let Some(packed) = backend.pack_centered_witness_z::<D>(
+            z_centered,
+            num_digits_fold,
+            group.params.log_basis_open(),
+            out.bit_width(),
+        )? {
+            if packed.digit_len != range.len() {
+                return Err(AkitaError::InvalidSize {
+                    expected: range.len(),
+                    actual: packed.digit_len,
+                });
+            }
+            return out.write_at_encoded(
+                range.start,
+                packed.digit_len,
+                &packed.bytes,
+                packed.negative_abs_max,
+                packed.positive_max,
+            );
+        }
+    }
+    let z_planes = {
+        let _span = tracing::info_span!("ring_switch_decompose_z_planes").entered();
+        decompose_z_folded_planes::<D>(z_centered, num_digits_fold, group.params.log_basis_open())?
+    };
     let _span = tracing::info_span!("ring_switch_emit_z_planes").entered();
     // `emit_witness_z_planes` walks (position, commit digit, fold digit) in the
     // same order the Z index formula lays them out, so the flattened plane
@@ -385,7 +436,7 @@ pub fn ring_switch_build_w<F, B>(
 ) -> Result<RecursiveWitnessFlat, AkitaError>
 where
     F: Field + CanonicalEncoding + Ring + AkitaSerialize,
-    B: RuntimeRingSwitchProveBackend<F>,
+    B: RuntimeRingSwitchProveBackend<F> + DigitRowsComputeBackend<F>,
 {
     let opening_batch = instance.opening_batch();
     validate_i8_setup_log_basis(
@@ -597,12 +648,13 @@ where
             )
             .entered();
             let group_layout = opening_batch.group_layout(group_index)?;
-            emit_witness_unit::<F>(
+            emit_witness_unit::<F, B>(
                 &mut out,
                 unit,
                 &owned[group_index],
                 group_layout.num_polynomials(),
                 witness_layout.num_chunks_for_group(group_index),
+                ring_switch_ctx.backend(),
             )?;
         }
         Ok(out)

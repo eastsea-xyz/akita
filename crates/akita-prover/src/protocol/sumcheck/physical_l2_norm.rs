@@ -204,7 +204,9 @@ impl<E: Field + Ring + Fold + Unreduced> SumcheckInstanceProver<E> for FusedRang
 
     fn ingest_challenge(&mut self, round: usize, challenge: E) {
         debug_assert_eq!(round, self.rounds_completed);
-        self.range.ingest_challenge(round, challenge);
+        self.range
+            .ingest_challenge(round, challenge)
+            .expect("concrete CPU range stage binding is infallible");
         self.norm
             .bind(challenge)
             .expect("validated physical norm prefix can fold");
