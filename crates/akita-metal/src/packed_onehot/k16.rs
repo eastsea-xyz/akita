@@ -545,14 +545,18 @@ mod tests {
                 .unwrap();
             for (actual, expected) in actual
                 .centered_coefficients
-                .chunks_exact(D)
+                .as_chunks::<D>()
+                .0
+                .iter()
                 .zip(expected.centered_coeffs_trusted::<D>().iter().step_by(2))
             {
                 assert_eq!(actual, expected);
             }
             let centered = actual
                 .centered_coefficients
-                .chunks_exact(D)
+                .as_chunks::<D>()
+                .0
+                .iter()
                 .flat_map(|coefficients| {
                     let mut row = [0i32; D];
                     row.copy_from_slice(coefficients);

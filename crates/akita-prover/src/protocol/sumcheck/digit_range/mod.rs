@@ -115,6 +115,11 @@ impl<E: Field> DirectDigitRangeProofInput<E> {
         self.digit_witness.decode()
     }
 
+    /// Decode into backend-owned signed-byte storage of the exact live length.
+    pub fn decode_digit_witness_into(&self, output: &mut [i8]) -> Result<(), AkitaError> {
+        self.digit_witness.decode_into(output)
+    }
+
     pub fn digit_witness_len(&self) -> usize {
         self.digit_witness.len()
     }

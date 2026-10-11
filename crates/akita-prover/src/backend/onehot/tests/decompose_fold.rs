@@ -85,7 +85,7 @@ fn batched_direct_indices_match_dense_aggregation() {
     let expected = aggregate_witnesses::<F, D>(
         &polys
             .iter()
-            .zip(challenges.chunks_exact(4))
+            .zip(challenges.as_chunks::<4>().0.iter())
             .map(|(poly, challenges)| {
                 materialize_onehot_as_dense::<F, D, _>(poly).decompose_fold::<D>(
                     challenges,

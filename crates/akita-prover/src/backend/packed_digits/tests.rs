@@ -58,6 +58,32 @@ fn parallel_block_encoder_round_trips_every_width_and_a_partial_tail() {
 }
 
 #[test]
+fn decode_into_covers_all_signed_widths_and_rejects_wrong_lengths_without_writes() {
+    for bit_width in 1..=8 {
+        let minimum = -(1i16 << (bit_width - 1));
+        let maximum = -minimum - 1;
+        for len in [0, 1, 63, 64, 65, 127, 129] {
+            let digits = (0..len)
+                .map(|index| [minimum, maximum, 0, -1][index % 4] as i8)
+                .collect::<Vec<_>>();
+            let packed = PackedSignedDigits::from_i8_digits(digits.clone(), bit_width).unwrap();
+            let mut output = vec![99; len];
+            packed.decode_into(&mut output).unwrap();
+            assert_eq!(output, digits, "width {bit_width}, length {len}");
+            for wrong_len in [Some(len + 1), len.checked_sub(1)].into_iter().flatten() {
+                let mut output = vec![99; wrong_len];
+                assert!(matches!(
+                    packed.decode_into(&mut output),
+                    Err(AkitaError::InvalidSize { expected, actual })
+                        if expected == len && actual == wrong_len
+                ));
+                assert!(output.iter().all(|&value| value == 99));
+            }
+        }
+    }
+}
+
+#[test]
 fn rejects_widths_and_digits_that_do_not_fit() {
     for bit_width in [0, 9, u8::MAX] {
         assert!(PackedSignedDigits::from_i8_digits(Vec::new(), bit_width).is_err());
@@ -258,7 +284,7 @@ fn iterator_arrays_cross_decode_block_boundaries_exactly() {
         .collect::<Vec<_>>();
     let packed = PackedSignedDigits::from_i8_digits(digits.clone(), 4).unwrap();
     let mut iter = packed.view().slice(62..134).unwrap().iter();
-    for expected in digits[62..134].chunks_exact(4) {
+    for expected in digits[62..134].as_chunks::<4>().0 {
         assert_eq!(iter.next_array::<4>().unwrap().as_slice(), expected);
     }
     assert!(iter.next_array::<4>().is_none());

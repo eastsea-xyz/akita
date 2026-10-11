@@ -2,6 +2,47 @@ use super::*;
 use jolt_field::Field;
 
 #[test]
+fn direct_range_writer_rejects_invalid_geometry_before_initialization() {
+    let runtime = MetalRuntime::new().unwrap();
+    for (live_len, domain_len, prefix_rounds) in [
+        (0, 64, 3),
+        (65, 64, 3),
+        (37, 63, 3),
+        (37, 64, 0),
+        (37, 64, 6),
+        (1usize << (usize::BITS - 1), 1usize << (usize::BITS - 1), 3),
+    ] {
+        assert!(runtime
+            .begin_fp128_direct_range_with_writer(live_len, domain_len, prefix_rounds, |_| {
+                panic!("malformed geometry reached the writer")
+            })
+            .is_err());
+    }
+    let too_large = usize::try_from(runtime.device.max_buffer_length()).unwrap() + 1;
+    let error = runtime
+        .begin_fp128_direct_range_with_writer(too_large, too_large.next_power_of_two(), 3, |_| {
+            panic!("unadmitted device allocation reached the writer")
+        })
+        .err()
+        .unwrap();
+    assert!(matches!(error, MetalCommitError::BufferTooLong { .. }));
+}
+
+#[test]
+fn direct_range_writer_initializes_storage_and_propagates_decode_failure() {
+    let runtime = MetalRuntime::new().unwrap();
+    let error = runtime
+        .begin_fp128_direct_range_with_writer(37, 64, 3, |output| {
+            assert_eq!(output, &[0; 37]);
+            output.fill(-2);
+            Err(MetalCommitError::InputStream("decode failure".into()))
+        })
+        .err()
+        .unwrap();
+    assert!(matches!(error, MetalCommitError::InputStream(message) if message == "decode failure"));
+}
+
+#[test]
 fn direct_range_session_owns_digits_after_source_overwrite_and_drop() {
     const DOMAIN_LEN: usize = 64;
     let runtime = MetalRuntime::new().unwrap();
@@ -33,7 +74,7 @@ fn direct_range_session_owns_digits_after_source_overwrite_and_drop() {
     for (round, &challenge) in challenges.iter().enumerate() {
         // Independently interpolate the dense CPU polynomial Q(u) = u(u - 2).
         let mut evaluations = [F::zero(); 3];
-        for pair in table.chunks_exact(2) {
+        for pair in table.as_chunks::<2>().0 {
             for (point, evaluation) in evaluations.iter_mut().enumerate() {
                 let value = pair[0] + F::from_u64(point as u64) * (pair[1] - pair[0]);
                 *evaluation += value * (value - two);
@@ -47,7 +88,9 @@ fn direct_range_session_owns_digits_after_source_overwrite_and_drop() {
             "round {round} after discarding the host source"
         );
         table = table
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| pair[0] + challenge * (pair[1] - pair[0]))
             .collect();
         let prefix_weights = if round < 3 {

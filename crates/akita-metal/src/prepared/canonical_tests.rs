@@ -71,7 +71,7 @@ fn cpu_matrix_reference(fields: &[F]) -> (Vec<[i8; 64]>, CyclotomicRing<F, 64>) 
             std::array::from_fn(|coefficient| ((column * 3 + coefficient * 5) % 8) as i8 - 4)
         })
         .collect::<Vec<[i8; D]>>();
-    let expected = fields.chunks_exact(D).zip(&digits).fold(
+    let expected = fields.as_chunks::<D>().0.iter().zip(&digits).fold(
         CyclotomicRing::<F, D>::zero(),
         |sum, (field, digit)| {
             sum + CyclotomicRing::from_slice(field)

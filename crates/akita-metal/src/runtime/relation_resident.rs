@@ -453,7 +453,9 @@ impl MetalRuntime {
                 )
             };
             let round_coefficients = proof_values
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .map(|values| std::array::from_fn(|index| values[index]))
                 .collect::<Vec<_>>();
             // SAFETY: the completed command initialized one count per suffix round.

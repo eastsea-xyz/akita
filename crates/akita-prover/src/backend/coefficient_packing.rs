@@ -153,8 +153,8 @@ where
                         let source_position = position_at(position)?;
                         let mut coefficient_index = 0;
                         for accumulator in &mut products {
-                            let mut chunks = weights.chunks_exact(4);
-                            for chunk in &mut chunks {
+                            let (chunks, remainder) = weights.as_chunks::<4>();
+                            for chunk in chunks {
                                 let source0 =
                                     coefficient(position, coefficient_index, &source_position);
                                 let source1 =
@@ -170,7 +170,7 @@ where
                                 *accumulator += (product0 + product1) + (product2 + product3);
                                 coefficient_index += 4;
                             }
-                            for &weight in chunks.remainder() {
+                            for &weight in remainder {
                                 let source =
                                     coefficient(position, coefficient_index, &source_position);
                                 *accumulator += weight.mul_base_unreduced(source);
@@ -709,7 +709,9 @@ mod tests {
         let mut padded = live_digits;
         padded.resize(2 * D, 0);
         let rings = padded
-            .chunks_exact(D)
+            .as_chunks::<D>()
+            .0
+            .iter()
             .map(|coefficients| {
                 CyclotomicRing::<F, D>::from_coefficients(std::array::from_fn(|index| {
                     F::from_i8(coefficients[index])

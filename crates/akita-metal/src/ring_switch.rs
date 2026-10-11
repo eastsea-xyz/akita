@@ -242,13 +242,15 @@ impl MetalBackend {
         }
         let (negacyclic, quotients) = coefficients.split_at(output_coefficients);
         let d_negacyclic = negacyclic
-            .chunks_exact(D)
-            .map(CyclotomicRing::from_slice)
+            .as_chunks::<D>()
+            .0
+            .iter()
+            .map(|row| CyclotomicRing::from_slice(row))
             .collect::<Vec<_>>();
         // The retained high product H converts L-H into the cyclic product L+H.
         let d_cyclic = d_negacyclic
             .iter()
-            .zip(quotients.chunks_exact(D))
+            .zip(quotients.as_chunks::<D>().0.iter())
             .map(|(row, coefficients)| {
                 let quotient = CyclotomicRing::from_slice(coefficients);
                 *row + quotient + quotient

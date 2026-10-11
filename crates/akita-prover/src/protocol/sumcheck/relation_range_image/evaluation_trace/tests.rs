@@ -274,7 +274,9 @@ fn coefficient_folds_reuse_prepared_source_buffers() {
     let expected_one_round = dense
         .chunks_exact(coeff_count)
         .flat_map(|lane| {
-            lane.chunks_exact(2)
+            lane.as_chunks::<2>()
+                .0
+                .iter()
                 .map(|pair| pair[0] + r0 * (pair[1] - pair[0]))
         })
         .collect::<Vec<_>>();
@@ -295,7 +297,9 @@ fn coefficient_folds_reuse_prepared_source_buffers() {
     let expected_two_round = dense
         .chunks_exact(coeff_count)
         .flat_map(|lane| {
-            lane.chunks_exact(4)
+            lane.as_chunks::<4>()
+                .0
+                .iter()
                 .map(|quad| fold_two_round_quad(quad[0], quad[1], quad[2], quad[3], r0, r1))
         })
         .collect::<Vec<_>>();

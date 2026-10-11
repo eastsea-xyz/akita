@@ -634,15 +634,13 @@ impl<'a> PackedSignedDigitView<'a> {
         let block_start = source_start + scalar_prefix;
         let full_blocks = (live - scalar_prefix) / DIGITS_PER_BLOCK;
         for (offset, block) in output[scalar_prefix..]
-            .chunks_exact_mut(DIGITS_PER_BLOCK)
+            .as_chunks_mut::<DIGITS_PER_BLOCK>()
+            .0
+            .iter_mut()
             .take(full_blocks)
             .enumerate()
         {
-            decode_full_block(
-                self.digits,
-                block_start / DIGITS_PER_BLOCK + offset,
-                block.try_into().expect("exact packed decode block"),
-            );
+            decode_full_block(self.digits, block_start / DIGITS_PER_BLOCK + offset, block);
         }
         let decoded = scalar_prefix + full_blocks * DIGITS_PER_BLOCK;
         for (offset, slot) in output
@@ -759,11 +757,12 @@ impl PackedSignedDigitIter<'_> {
 fn decode_prefix(digits: &PackedSignedDigits, output: &mut [i8]) {
     let full_blocks = output.len() / DIGITS_PER_BLOCK;
     for (block_index, block) in output
-        .chunks_exact_mut(DIGITS_PER_BLOCK)
+        .as_chunks_mut::<DIGITS_PER_BLOCK>()
+        .0
+        .iter_mut()
         .take(full_blocks)
         .enumerate()
     {
-        let block: &mut [i8; DIGITS_PER_BLOCK] = block.try_into().expect("exact chunk length");
         decode_full_block(digits, block_index, block);
     }
     for (index, slot) in output

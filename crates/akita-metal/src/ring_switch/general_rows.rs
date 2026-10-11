@@ -121,8 +121,10 @@ impl MetalBackend {
             .map_err(MetalCommitError::into_akita)?;
             let rings = |values: &[F]| {
                 values
-                    .chunks_exact(D)
-                    .map(CyclotomicRing::from_slice)
+                    .as_chunks::<D>()
+                    .0
+                    .iter()
+                    .map(|row| CyclotomicRing::from_slice(row))
                     .collect::<Vec<_>>()
             };
             match role {

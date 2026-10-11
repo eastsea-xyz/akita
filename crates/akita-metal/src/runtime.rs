@@ -228,7 +228,10 @@ fn pack_biased_subring64_challenges(dense_challenges: &[i8]) -> Result<Vec<u32>,
     }
 
     let mut packed = Vec::with_capacity(dense_challenges.len());
-    for challenge in dense_challenges.chunks_exact(FP128_D512_SUBRING_DIMENSION) {
+    for challenge in dense_challenges
+        .as_chunks::<FP128_D512_SUBRING_DIMENSION>()
+        .0
+    {
         for source_phase in 0..8 {
             for destination_quad in 0..8 {
                 let start = (8 * destination_quad + FP128_D512_SUBRING_DIMENSION - source_phase)

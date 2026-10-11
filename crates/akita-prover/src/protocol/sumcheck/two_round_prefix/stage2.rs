@@ -321,7 +321,9 @@ pub(crate) fn build_stage2_bivariate_skip_proof_from_m_compact<E: Field + Ring +
                 debug_assert_eq!(values.len(), y_len);
                 let mut x_linear_pos = [E::SmallProduct::zero(); STAGE2_COMPRESSED_POINT_COUNT];
                 let mut x_linear_neg = [E::SmallProduct::zero(); STAGE2_COMPRESSED_POINT_COUNT];
-                for (linear_quad, &lookup_idx) in values.chunks_exact(4).zip(&lookup_indices) {
+                for (linear_quad, &lookup_idx) in
+                    values.as_chunks::<4>().0.iter().zip(&lookup_indices)
+                {
                     let linear_point_values = stage2_relation_m_point_values_compressed([
                         linear_quad[0],
                         linear_quad[1],

@@ -291,7 +291,9 @@ impl MetalRuntime {
                 )
             };
             let round_coefficients = round_values
-                .chunks_exact(FP128_DIRECT_RANGE_STORED_COEFFICIENTS)
+                .as_chunks::<FP128_DIRECT_RANGE_STORED_COEFFICIENTS>()
+                .0
+                .iter()
                 .map(|values| std::array::from_fn(|index| values[index]))
                 .collect::<Vec<_>>();
             // SAFETY: the completed command initialized exactly `num_rounds` challenges.
@@ -348,15 +350,35 @@ impl MetalRuntime {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn begin_fp128_direct_range(
         &self,
         digits: &[i8],
         domain_len: usize,
         compact_prefix_rounds: usize,
     ) -> Result<(DirectRangeSession, Duration), MetalCommitError> {
+        self.begin_fp128_direct_range_with_writer(
+            digits.len(),
+            domain_len,
+            compact_prefix_rounds,
+            |output| {
+                output.copy_from_slice(digits);
+                Ok(())
+            },
+        )
+    }
+
+    pub(crate) fn begin_fp128_direct_range_with_writer(
+        &self,
+        live_len: usize,
+        domain_len: usize,
+        compact_prefix_rounds: usize,
+        write_digits: impl FnOnce(&mut [i8]) -> Result<(), MetalCommitError>,
+    ) -> Result<(DirectRangeSession, Duration), MetalCommitError> {
         if domain_len < 4
             || !domain_len.is_power_of_two()
-            || digits.len() > domain_len
+            || live_len == 0
+            || live_len > domain_len
             || compact_prefix_rounds == 0
             || compact_prefix_rounds >= domain_len.trailing_zeros() as usize
         {
@@ -364,8 +386,9 @@ impl MetalRuntime {
                 "direct range proof requires a power-of-two domain of at least four entries".into(),
             ));
         }
-        let setup_start = Instant::now();
-        let compact_digits = self.shared_buffer_from_slice(digits)?;
+        if live_len > isize::MAX as usize {
+            return Err(MetalCommitError::ShapeOverflow("direct range digit slice"));
+        }
         let compact_prefix_size = 1usize
             .checked_shl(u32::try_from(compact_prefix_rounds).map_err(|_| {
                 MetalCommitError::ShapeOverflow("direct range compact prefix width")
@@ -373,7 +396,7 @@ impl MetalRuntime {
             .ok_or(MetalCommitError::ShapeOverflow(
                 "direct range compact prefix size",
             ))?;
-        let first_table_len = digits.len().div_ceil(compact_prefix_size).max(1);
+        let first_table_len = live_len.div_ceil(compact_prefix_size).max(1);
         let second_table_len = first_table_len.div_ceil(2).max(1);
         let first_table_bytes = first_table_len.checked_mul(size_of::<Fp128Limbs>()).ok_or(
             MetalCommitError::ShapeOverflow("direct range first table bytes"),
@@ -383,11 +406,7 @@ impl MetalRuntime {
             .ok_or(MetalCommitError::ShapeOverflow(
                 "direct range second table bytes",
             ))?;
-        let tables = [
-            self.private_buffer(first_table_bytes)?,
-            self.private_buffer(second_table_bytes)?,
-        ];
-        let maximum_pairs = digits.len().div_ceil(2);
+        let maximum_pairs = live_len.div_ceil(2);
         let maximum_workgroups = direct_range_workgroups(maximum_pairs);
         let partial_bytes = maximum_workgroups
             .checked_mul(FP128_DIRECT_RANGE_STORED_COEFFICIENTS)
@@ -401,11 +420,7 @@ impl MetalRuntime {
                 "direct range message output bytes",
             ))?;
         let final_output_bytes = size_of::<Fp128Limbs>();
-        let partials = self.private_buffer(partial_bytes)?;
-        let round_output = self.shared_buffer(round_output_bytes)?;
-        let final_output = self.shared_buffer(final_output_bytes)?;
-        let allocation_bytes = digits
-            .len()
+        let allocation_bytes = live_len
             .checked_add(first_table_bytes)
             .and_then(|bytes| bytes.checked_add(second_table_bytes))
             .and_then(|bytes| bytes.checked_add(partial_bytes))
@@ -414,6 +429,33 @@ impl MetalRuntime {
             .ok_or(MetalCommitError::ShapeOverflow(
                 "direct range resident allocation bytes",
             ))?;
+        for bytes in [
+            live_len,
+            first_table_bytes,
+            second_table_bytes,
+            partial_bytes,
+            round_output_bytes,
+            final_output_bytes,
+        ] {
+            self.validate_buffer_length(bytes)?;
+        }
+        let setup_start = Instant::now();
+        let compact_digits = self.shared_buffer(live_len)?;
+        // SAFETY: Shared owns live_len bytes, admitted above for allocation and
+        // slice length. Initialize every byte before making a mutable i8 slice;
+        // no GPU reader exists, and the callback cannot retain the slice.
+        unsafe {
+            let pointer = compact_digits.contents().cast::<i8>();
+            pointer.write_bytes(0, live_len);
+            write_digits(std::slice::from_raw_parts_mut(pointer, live_len))?;
+        }
+        let tables = [
+            self.private_buffer(first_table_bytes)?,
+            self.private_buffer(second_table_bytes)?,
+        ];
+        let partials = self.private_buffer(partial_bytes)?;
+        let round_output = self.shared_buffer(round_output_bytes)?;
+        let final_output = self.shared_buffer(final_output_bytes)?;
         Ok((
             DirectRangeSession {
                 compact_digits,
@@ -421,9 +463,9 @@ impl MetalRuntime {
                 partials,
                 round_output,
                 final_output,
-                live_len: digits.len(),
+                live_len,
                 current_len: domain_len,
-                current_live_len: digits.len(),
+                current_live_len: live_len,
                 current_table: None,
                 compact_prefix_rounds,
                 rounds_folded: 0,

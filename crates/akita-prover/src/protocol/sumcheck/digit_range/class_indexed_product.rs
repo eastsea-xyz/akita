@@ -533,7 +533,9 @@ fn prepare_product_compact_luts<E: Field + Ring + Fold, const LANES: usize>(
 ) -> CompactDigitTreeSecondRoundLuts<E> {
     let rows = input
         .nodes
-        .chunks_exact(LANES)
+        .as_chunks::<LANES>()
+        .0
+        .iter()
         .map(|row| std::array::from_fn(|lane| row[lane]))
         .collect();
     let nodes = ProductNodeTable::<E, LANES>::from_rows(rows);

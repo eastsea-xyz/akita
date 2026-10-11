@@ -508,8 +508,8 @@ fn direct_relation_two_round_prefix_host(
     let y_quads = data.coefficient_count / 4;
     let mut alpha_points = Vec::with_capacity(8 * y_quads);
     for point in 1..9 {
-        for quad in data.alpha.chunks_exact(4) {
-            let values: [F; 4] = quad.try_into().map_err(|_| AkitaError::InvalidProof)?;
+        for quad in data.alpha.as_chunks::<4>().0 {
+            let values = *quad;
             alpha_points.push(crate::field::Fp128Limbs::from_field(
                 direct_relation_prefix_point(values, point),
             ));
@@ -641,17 +641,19 @@ impl DirectDigitRangeProofBackend<F, F> for MetalBackend {
             }
             None => return Err(MetalCommitError::DeviceUnavailable.into_akita()),
         };
-        let decoded_witness = {
-            let _span = tracing::info_span!("direct_range_decode_packed_digits").entered();
-            input.decode_digit_witness()
-        };
         const COMPACT_PREFIX_ROUNDS: usize = 3;
         let (mut session, setup_time) = {
             let _span = tracing::info_span!("direct_range_session_setup").entered();
-            match runtime.begin_fp128_direct_range(
-                &decoded_witness,
+            match runtime.begin_fp128_direct_range_with_writer(
+                input.digit_witness_len(),
                 domain_len,
                 COMPACT_PREFIX_ROUNDS,
+                |digits| {
+                    let _span = tracing::info_span!("direct_range_decode_packed_digits").entered();
+                    input
+                        .decode_digit_witness_into(digits)
+                        .map_err(|error| MetalCommitError::InputStream(error.to_string()))
+                },
             ) {
                 Ok(session) => session,
                 Err(_error) if self.policy() == MetalExecutionPolicy::PreferMetal => {
@@ -660,8 +662,6 @@ impl DirectDigitRangeProofBackend<F, F> for MetalBackend {
                 Err(error) => return Err(error.into_akita()),
             }
         };
-        // Session setup copies the digits into owned Shared storage.
-        drop(decoded_witness);
         self.update_opening_metrics(|metrics| {
             metrics.buffer_setup_time += setup_time;
             metrics.allocation_bytes = metrics

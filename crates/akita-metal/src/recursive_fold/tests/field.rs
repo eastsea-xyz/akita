@@ -70,7 +70,9 @@ fn field_sparse_parity<const D: usize>() {
             })
             .collect::<Vec<_>>();
         let rings = fields
-            .chunks_exact(D)
+            .as_chunks::<D>()
+            .0
+            .iter()
             .map(|row| CyclotomicRing::from_coefficients(std::array::from_fn(|i| row[i])))
             .collect::<Vec<_>>();
         let cpu_params = DecomposeParams {
@@ -226,7 +228,9 @@ fn recursive_field_evaluate_fold_uses_canonical_negacyclic_arithmetic() {
         )
         .unwrap();
     let rings = fields
-        .chunks_exact(D)
+        .as_chunks::<D>()
+        .0
+        .iter()
         .map(|row| CyclotomicRing::from_coefficients(std::array::from_fn(|i| row[i])))
         .collect::<Vec<_>>();
     let expected_folded = rings
@@ -330,7 +334,9 @@ fn recursive_packed_tensor_tail_uses_separate_evaluation_and_decomposition_exten
         .dispatch_recursive_sparse_fold(&[(source, p, terms)])
         .unwrap();
     let planes = digits[..7 * D]
-        .chunks_exact(D)
+        .as_chunks::<D>()
+        .0
+        .iter()
         .map(|row| std::array::from_fn(|i| row[i]))
         .collect::<Vec<[i8; D]>>();
     let expected =

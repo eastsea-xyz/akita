@@ -212,8 +212,10 @@ impl MetalBackend {
             .collect::<Result<Vec<_>, _>>()
             .map_err(MetalCommitError::into_akita)?;
         let result = coefficients
-            .chunks_exact(D)
-            .map(CyclotomicRing::from_slice)
+            .as_chunks::<D>()
+            .0
+            .iter()
+            .map(|row| CyclotomicRing::from_slice(row))
             .collect();
         let canonical_readback = readback_start.elapsed();
         self.update_opening_metrics(|metrics| {

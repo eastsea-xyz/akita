@@ -32,7 +32,9 @@ impl MetalBackend {
             .map_err(MetalCommitError::into_akita)?;
         let folded_count = p.num_blocks as usize * D;
         let folded = coefficients[..folded_count]
-            .chunks_exact(D)
+            .as_chunks::<D>()
+            .0
+            .iter()
             .map(|row| CyclotomicRing::from_coefficients(std::array::from_fn(|i| row[i])))
             .collect();
         let eval = CyclotomicRing::from_coefficients(std::array::from_fn(|i| {
